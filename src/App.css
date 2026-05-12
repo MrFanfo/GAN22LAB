@@ -1,0 +1,193 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding: 16px;
+  font-family: system-ui, -apple-system, sans-serif;
+  background: #0f1117;
+  color: #e2e8f0;
+}
+
+main {
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+h1 {
+  font-size: 1.6rem;
+  margin-bottom: 4px;
+  color: #f0f4ff;
+}
+
+h2 {
+  font-size: 1.1rem;
+  margin: 0 0 12px 0;
+  color: #a0b0c8;
+}
+
+.description {
+  margin: 0 0 20px 0;
+  color: #7a8fa8;
+  font-size: 0.9rem;
+}
+
+.panel {
+  border: 1px solid #2a3448;
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 16px;
+  background: #161b27;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.field label {
+  font-size: 0.85rem;
+  color: #8a9bb8;
+  font-weight: 500;
+}
+
+.checkbox-field {
+  flex-direction: row;
+  align-items: center;
+}
+
+.checkbox-field label {
+  font-size: 0.9rem;
+  color: #c0cde0;
+  cursor: pointer;
+}
+
+input[type="text"] {
+  padding: 8px 10px;
+  background: #0f1117;
+  border: 1px solid #2a3448;
+  border-radius: 5px;
+  color: #e2e8f0;
+  font-size: 0.9rem;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+input[type="text"]:focus {
+  border-color: #4a6fa5;
+}
+
+.mac-input {
+  max-width: 420px;
+}
+
+.move-input {
+  max-width: 260px;
+}
+
+.mac-status {
+  font-size: 0.82rem;
+  font-family: monospace;
+}
+
+.mac-neutral {
+  color: #7a8fa8;
+}
+
+.mac-valid {
+  color: #4caf80;
+}
+
+.mac-invalid {
+  color: #e05555;
+}
+
+.button-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+button {
+  padding: 7px 14px;
+  background: #1e2d45;
+  border: 1px solid #2e4060;
+  border-radius: 5px;
+  color: #c5d5ef;
+  font-size: 0.88rem;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+button:hover:not(:disabled) {
+  background: #263855;
+  border-color: #4a6fa5;
+}
+
+button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.status-row {
+  margin-top: 12px;
+  font-size: 0.9rem;
+}
+
+.status-label {
+  color: #7a8fa8;
+  margin-right: 8px;
+}
+
+.status-value {
+  font-family: monospace;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+
+.status-disconnected { color: #aab8cc; background: #1a2030; }
+.status-requesting-device { color: #f0c060; background: #2a200a; }
+.status-connecting { color: #60b0f0; background: #0a1a2a; }
+.status-connected { color: #4cda80; background: #0a2018; }
+.status-disconnected-by-device { color: #e08050; background: #2a1505; }
+.status-error { color: #e05555; background: #2a0505; }
+
+.log-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.log-header h2 {
+  margin: 0;
+}
+
+.log-count {
+  color: #6a7f9a;
+  font-weight: 400;
+  font-size: 0.9rem;
+}
+
+.log-viewer {
+  background: #080c12;
+  border: 1px solid #1a2535;
+  border-radius: 5px;
+  padding: 12px;
+  font-family: "Fira Mono", "Consolas", monospace;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  color: #b0c4de;
+  overflow-y: auto;
+  max-height: 600px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  margin: 0;
+}
