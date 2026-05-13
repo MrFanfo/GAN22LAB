@@ -9,7 +9,7 @@ import {
 } from "./ganConstants";
 import { chooseMac } from "./mac";
 import { dataViewToBytes, dataViewToHex, tryDecodeUtf8 } from "./hex";
-import { tryDecryptGen1Packet } from "./ganCrypto";
+import { tryDecryptGen1Packet, tryDecryptGen234Packet, classifyGen4Event } from "./ganCrypto";
 import type { Gen1DeviceInfo } from "./ganCrypto";
 import type { BleLogEntry, ConnectionStatus, GanBleLabOptions, PacketRow } from "./types";
 
@@ -49,6 +49,8 @@ export class GanBleLab {
   private gen1DeviceInfo: Gen1DeviceInfo = { firmwareRevision: null, systemId: null };
   private deviceName: string | null = null;
   private detectedGenLabel: string = "GAN (raw)";
+  private detectedGen: "gen1" | "gen234" | null = null;
+  private chosenMac: string | null = null;
   private rowCounter = 0;
   // Sliding window of recent notification timestamps per characteristic UUID,
   // used to detect high-frequency characteristics (gyro spam ~12 Hz).
@@ -89,6 +91,8 @@ export class GanBleLab {
     this.gen1DeviceInfo = { firmwareRevision: null, systemId: null };
     this.deviceName = null;
     this.detectedGenLabel = "GAN (raw)";
+    this.detectedGen = null;
+    this.chosenMac = null;
     this.notifyTimes.clear();
     this.options.onLog({ type: "info", message: "Disconnected by user" });
   }
@@ -124,6 +128,7 @@ export class GanBleLab {
       autoMac: null,
       preferManualMac: this.options.preferManualMac,
     });
+    this.chosenMac = mac;
 
     this.options.onLog({
       type: "device",
@@ -279,6 +284,7 @@ export class GanBleLab {
 
     const genLabel = SERVICE_GEN_LABEL[detectedServiceUuid] ?? detectedServiceUuid;
     this.detectedGenLabel = `GAN ${genLabel} (raw)`;
+    this.detectedGen = detectedServiceUuid === GAN_GEN1_SERVICE ? "gen1" : "gen234";
     this.options.onLog({ type: "service", message: `GAN service found: ${genLabel}` });
 
     // Enumerate all characteristics on this service
@@ -353,31 +359,55 @@ export class GanBleLab {
     const bytes = dataViewToBytes(value);
     const rawHex = toHex(bytes);
     const meta = CHAR_META[uuid] ?? { label: `Unknown (${uuid.slice(4, 8)})`, packetType: "NOTIFY" as const, isTelemetry: false };
-    const highFreq = this.isHighFrequency(uuid);
-    const isTelemetry = meta.isTelemetry || highFreq;
 
-    const decryptResult = tryDecryptGen1Packet(bytes, this.gen1DeviceInfo);
+    let packetType = meta.packetType;
+    let meaning = meta.label;
+    let isTelemetry = meta.isTelemetry;
+    let decryptedHex: string | null = null;
+    let decryptStatus: PacketRow["decryptStatus"] = "unavailable";
+
+    if (this.detectedGen === "gen234") {
+      const result = tryDecryptGen234Packet(bytes, this.chosenMac);
+      if (result.status === "success") {
+        decryptedHex = toHex(result.decryptedBytes);
+        decryptStatus = "success";
+        const cls = classifyGen4Event(result.decryptedBytes[0] ?? 0);
+        packetType = cls.packetType;
+        meaning = cls.meaning;
+        isTelemetry = cls.isTelemetry;
+      } else {
+        decryptStatus = result.status;
+        // Fall back to rate-based detection when decryption unavailable/failed
+        const highFreq = this.isHighFrequency(uuid);
+        if (highFreq && packetType !== "GYRO") packetType = "GYRO";
+        isTelemetry = isTelemetry || highFreq;
+        if (highFreq) meaning = `${meta.label} (high-freq / gyro)`;
+      }
+    } else {
+      // Gen1 path
+      const result = tryDecryptGen1Packet(bytes, this.gen1DeviceInfo);
+      if (result.status === "success") {
+        decryptedHex = toHex(result.decryptedBytes);
+      }
+      decryptStatus = result.status;
+      const highFreq = this.isHighFrequency(uuid);
+      if (highFreq && packetType !== "GYRO") packetType = "GYRO";
+      isTelemetry = isTelemetry || highFreq;
+      if (highFreq) meaning = `${meta.label} (high-freq / gyro)`;
+    }
 
     const row: PacketRow = {
       id: crypto.randomUUID(),
       packetNum: ++this.rowCounter,
       at: Date.now(),
       mode: "raw",
-      packetType: highFreq && meta.packetType !== "GYRO" ? "GYRO" : meta.packetType,
+      packetType,
       characteristicUuid: uuid,
       rawHex,
       rawByteLength: bytes.length,
-      decryptedHex:
-        decryptResult.status === "success"
-          ? toHex(decryptResult.decryptedBytes)
-          : null,
-      decryptStatus:
-        decryptResult.status === "success"
-          ? "success"
-          : decryptResult.status === "failed"
-          ? "failed"
-          : "unavailable",
-      meaning: highFreq ? `${meta.label} (high-freq / gyro)` : meta.label,
+      decryptedHex,
+      decryptStatus,
+      meaning,
       transform: null,
       cubeTimestamp: null,
       deviceName: this.deviceName,

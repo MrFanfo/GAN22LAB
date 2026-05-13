@@ -1,0 +1,1 @@
+{"root":["./src/App.tsx","./src/main.tsx","./src/gan/ganBle.ts","./src/gan/ganConstants.ts","./src/gan/ganCrypto.ts","./src/gan/hex.ts","./src/gan/libraryConnector.ts","./src/gan/mac.ts","./src/gan/types.ts"],"version":"5.9.3"}

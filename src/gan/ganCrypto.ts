@@ -1,4 +1,4 @@
-import { AES } from "aes-js";
+import { AES, ModeOfOperation } from "aes-js";
 import { decompressFromEncodedURIComponent } from "lz-string";
 
 // GAN Gen1 compressed key blobs (same as library source)
@@ -65,6 +65,81 @@ export type GanDecryptResult =
   | { status: "success"; decryptedBytes: Uint8Array }
   | { status: "failed"; message: string }
   | { status: "unavailable"; message: string };
+
+// ── Gen2 / Gen3 / Gen4 (AES-128-CBC, salted by MAC) ────────────────────────
+
+const GAN_GEN234_BASE_KEY = [0x01,0x02,0x42,0x28,0x31,0x91,0x16,0x07,0x20,0x05,0x18,0x54,0x42,0x11,0x12,0x53] as const;
+const GAN_GEN234_BASE_IV  = [0x11,0x03,0x32,0x28,0x21,0x01,0x76,0x27,0x20,0x95,0x78,0x14,0x32,0x12,0x02,0x43] as const;
+
+function macToSalt(mac: string): Uint8Array | null {
+  const parts = mac.split(":");
+  if (parts.length !== 6) return null;
+  const bytes = parts.map((p) => parseInt(p, 16));
+  if (bytes.some(isNaN)) return null;
+  return new Uint8Array(bytes.reverse());
+}
+
+function decryptChunk(buf: Uint8Array, offset: number, key: Uint8Array, iv: Uint8Array): void {
+  // New CBC instance each call so IV is always fresh (matches library behavior)
+  const cipher = new ModeOfOperation.cbc(key, iv);
+  const chunk = cipher.decrypt(buf.subarray(offset, offset + 16));
+  buf.set(chunk, offset);
+}
+
+export type Gen234EventClassification = {
+  packetType: "MOVE" | "FACELETS" | "GYRO" | "BATTERY" | "NOTIFY";
+  meaning: string;
+  isTelemetry: boolean;
+};
+
+export function classifyGen4Event(eventByte: number): Gen234EventClassification {
+  switch (eventByte) {
+    case 0x01: return { packetType: "MOVE",     meaning: "Gen4 Move",         isTelemetry: false };
+    case 0xD1: return { packetType: "MOVE",     meaning: "Gen4 Move history", isTelemetry: false };
+    case 0xED: return { packetType: "FACELETS", meaning: "Gen4 Facelets",     isTelemetry: false };
+    case 0xEC: return { packetType: "GYRO",     meaning: "Gen4 Gyro",         isTelemetry: true  };
+    case 0xEF: return { packetType: "BATTERY",  meaning: "Gen4 Battery",      isTelemetry: true  };
+    default:   return {
+      packetType: "NOTIFY",
+      meaning: `Gen4 Unknown (0x${eventByte.toString(16).padStart(2, "0")})`,
+      isTelemetry: false,
+    };
+  }
+}
+
+export function tryDecryptGen234Packet(
+  encryptedBytes: Uint8Array,
+  mac: string | null
+): GanDecryptResult {
+  if (!mac) {
+    return { status: "unavailable", message: "MAC required for Gen2/3/4 decryption" };
+  }
+
+  const salt = macToSalt(mac);
+  if (!salt) {
+    return { status: "failed", message: `Invalid MAC: ${mac}` };
+  }
+
+  const key = new Uint8Array(GAN_GEN234_BASE_KEY);
+  const iv  = new Uint8Array(GAN_GEN234_BASE_IV);
+  for (let i = 0; i < 6; i++) {
+    key[i] = (GAN_GEN234_BASE_KEY[i]! + salt[i]!) % 0xFF;
+    iv[i]  = (GAN_GEN234_BASE_IV[i]!  + salt[i]!) % 0xFF;
+  }
+
+  try {
+    const result = new Uint8Array(encryptedBytes);
+    if (result.length > 16) {
+      decryptChunk(result, result.length - 16, key, iv);
+    }
+    decryptChunk(result, 0, key, iv);
+    return { status: "success", decryptedBytes: result };
+  } catch (e) {
+    return { status: "failed", message: e instanceof Error ? e.message : "AES decrypt error" };
+  }
+}
+
+// ── Gen1 ────────────────────────────────────────────────────────────────────
 
 export function tryDecryptGen1Packet(
   encryptedBytes: Uint8Array,
