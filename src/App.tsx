@@ -121,17 +121,17 @@ export default function App() {
     setPacketRows([]);
   }, []);
 
+  const visibleRows = useMemo(
+    () => (showTelemetry ? packetRows : packetRows.filter((r) => !r.isTelemetry)),
+    [packetRows, showTelemetry]
+  );
+
   const handleExport = useCallback(() => {
     downloadJson(
       `gan251-lab-${new Date().toISOString().replace(/[:.]/g, "-")}.json`,
       { exportedAt: new Date().toISOString(), mode, showTelemetry, rows: visibleRows }
     );
   }, [mode, showTelemetry, visibleRows]);
-
-  const visibleRows = useMemo(
-    () => (showTelemetry ? packetRows : packetRows.filter((r) => !r.isTelemetry)),
-    [packetRows, showTelemetry]
-  );
 
   const deltaMs = useMemo(
     () =>
