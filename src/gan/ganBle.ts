@@ -1,6 +1,9 @@
 import {
-  GAN_SERVICE_UUID,
-  GAN_CHARACTERISTIC_UUIDS,
+  ALL_GAN_SERVICE_UUIDS,
+  GAN_GEN1_SERVICE,
+  GAN_GEN2_SERVICE,
+  GAN_GEN3_SERVICE,
+  GAN_GEN4_SERVICE,
   DEVICE_INFO_SERVICE_UUID,
   DEVICE_INFO_CHARACTERISTICS,
 } from "./ganConstants";
@@ -10,13 +13,28 @@ import { tryDecryptGen1Packet } from "./ganCrypto";
 import type { Gen1DeviceInfo } from "./ganCrypto";
 import type { BleLogEntry, ConnectionStatus, GanBleLabOptions, PacketRow } from "./types";
 
-// Map GAN Gen1 characteristic UUID → label / packet type / telemetry flag
+// Known characteristic UUID → label / packet type
 const CHAR_META: Record<string, { label: string; packetType: PacketRow["packetType"]; isTelemetry: boolean }> = {
-  "0000fff2-0000-1000-8000-00805f9b34fb": { label: "Facelets state",        packetType: "FACELETS",  isTelemetry: false },
-  "0000fff4-0000-1000-8000-00805f9b34fb": { label: "Gyro data",             packetType: "GYRO",      isTelemetry: true  },
-  "0000fff5-0000-1000-8000-00805f9b34fb": { label: "Cube state / moves",    packetType: "MOVE",      isTelemetry: false },
-  "0000fff6-0000-1000-8000-00805f9b34fb": { label: "Move counter",          packetType: "NOTIFY",    isTelemetry: false },
-  "0000fff7-0000-1000-8000-00805f9b34fb": { label: "Battery status",        packetType: "BATTERY",   isTelemetry: true  },
+  // Gen1
+  "0000fff2-0000-1000-8000-00805f9b34fb": { label: "Gen1 Facelets state",      packetType: "FACELETS",  isTelemetry: false },
+  "0000fff4-0000-1000-8000-00805f9b34fb": { label: "Gen1 Gyro data",           packetType: "GYRO",      isTelemetry: true  },
+  "0000fff5-0000-1000-8000-00805f9b34fb": { label: "Gen1/4 Cube state/moves",  packetType: "MOVE",      isTelemetry: false },
+  "0000fff6-0000-1000-8000-00805f9b34fb": { label: "Gen1/4 Move counter",      packetType: "NOTIFY",    isTelemetry: false },
+  "0000fff7-0000-1000-8000-00805f9b34fb": { label: "Gen1/4 Battery status",    packetType: "BATTERY",   isTelemetry: true  },
+  // Gen2
+  "28be4a4a-cd67-11e9-a32f-2a2ae2dbcce4": { label: "Gen2 Command",            packetType: "NOTIFY",    isTelemetry: false },
+  "28be4cb6-cd67-11e9-a32f-2a2ae2dbcce4": { label: "Gen2 State",              packetType: "MOVE",      isTelemetry: false },
+  // Gen3
+  "8653000c-43e6-47b7-9cb0-5fc21d4ae340": { label: "Gen3 Command",            packetType: "NOTIFY",    isTelemetry: false },
+  "8653000b-43e6-47b7-9cb0-5fc21d4ae340": { label: "Gen3 State",              packetType: "MOVE",      isTelemetry: false },
+};
+
+// Gen → service UUID map (for logging detected generation)
+const SERVICE_GEN_LABEL: Record<string, string> = {
+  [GAN_GEN1_SERVICE]: "Gen1 (fff0)",
+  [GAN_GEN2_SERVICE]: "Gen2",
+  [GAN_GEN3_SERVICE]: "Gen3",
+  [GAN_GEN4_SERVICE]: "Gen4",
 };
 
 function toHex(bytes: Uint8Array): string {
@@ -35,16 +53,17 @@ export class GanBleLab {
   constructor(private options: GanBleLabOptions) {}
 
   async connectNormal(): Promise<void> {
+    // Filter shows all known GAN cube generations in the picker
     await this.connectWithOptions({
-      filters: [{ services: [GAN_SERVICE_UUID] }],
-      optionalServices: [GAN_SERVICE_UUID, DEVICE_INFO_SERVICE_UUID],
+      filters: ALL_GAN_SERVICE_UUIDS.map((uuid) => ({ services: [uuid] })),
+      optionalServices: [...ALL_GAN_SERVICE_UUIDS, DEVICE_INFO_SERVICE_UUID],
     });
   }
 
   async connectFallbackAllDevices(): Promise<void> {
     await this.connectWithOptions({
       acceptAllDevices: true,
-      optionalServices: [GAN_SERVICE_UUID, DEVICE_INFO_SERVICE_UUID],
+      optionalServices: [...ALL_GAN_SERVICE_UUIDS, DEVICE_INFO_SERVICE_UUID],
     });
   }
 
@@ -164,22 +183,46 @@ export class GanBleLab {
   private async inspectGanServiceAndStartNotifications(): Promise<void> {
     if (!this.server) return;
 
-    let service: BluetoothRemoteGATTService;
-    try {
-      service = await this.server.getPrimaryService(GAN_SERVICE_UUID);
-      this.options.onLog({ type: "service", message: "GAN service found" });
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      this.options.onLog({ type: "error", message: `GAN service not found: ${msg}` });
+    // Try each known GAN service UUID in generation order
+    let service: BluetoothRemoteGATTService | null = null;
+    let detectedServiceUuid: string | null = null;
+
+    for (const uuid of ALL_GAN_SERVICE_UUIDS) {
+      try {
+        service = await this.server.getPrimaryService(uuid);
+        detectedServiceUuid = uuid;
+        break;
+      } catch {
+        // Not this generation — try next
+      }
+    }
+
+    if (!service || !detectedServiceUuid) {
+      this.options.onLog({
+        type: "error",
+        message: `No GAN service found. Tried: ${ALL_GAN_SERVICE_UUIDS.join(", ")}`,
+      });
       return;
     }
 
-    for (const uuid of GAN_CHARACTERISTIC_UUIDS) {
+    const genLabel = SERVICE_GEN_LABEL[detectedServiceUuid] ?? detectedServiceUuid;
+    this.options.onLog({ type: "service", message: `GAN service found: ${genLabel}` });
+
+    // Enumerate all characteristics on this service
+    let characteristics: BluetoothRemoteGATTCharacteristic[] = [];
+    try {
+      characteristics = await service.getCharacteristics();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.options.onLog({ type: "warning", message: `Could not enumerate characteristics: ${msg}` });
+    }
+
+    for (const char of characteristics) {
       try {
-        await this.inspectCharacteristic(service, uuid);
+        await this.inspectCharacteristic(service, char.uuid);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        this.options.onLog({ type: "warning", message: `Error on ${uuid}: ${msg}` });
+        this.options.onLog({ type: "warning", message: `Error on ${char.uuid}: ${msg}` });
       }
     }
   }
