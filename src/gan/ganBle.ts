@@ -48,7 +48,20 @@ export class GanBleLab {
   private server: BluetoothRemoteGATTServer | null = null;
   private gen1DeviceInfo: Gen1DeviceInfo = { firmwareRevision: null, systemId: null };
   private deviceName: string | null = null;
+  private detectedGenLabel: string = "GAN (raw)";
   private rowCounter = 0;
+  // Sliding window of recent notification timestamps per characteristic UUID,
+  // used to detect high-frequency characteristics (gyro spam ~12 Hz).
+  private readonly notifyTimes = new Map<string, number[]>();
+
+  private isHighFrequency(uuid: string): boolean {
+    const now = Date.now();
+    const times = this.notifyTimes.get(uuid) ?? [];
+    const recent = times.filter((t) => now - t < 1000);
+    recent.push(now);
+    this.notifyTimes.set(uuid, recent);
+    return recent.length > 5;
+  }
 
   constructor(private options: GanBleLabOptions) {}
 
@@ -75,6 +88,8 @@ export class GanBleLab {
     this.server = null;
     this.gen1DeviceInfo = { firmwareRevision: null, systemId: null };
     this.deviceName = null;
+    this.detectedGenLabel = "GAN (raw)";
+    this.notifyTimes.clear();
     this.options.onLog({ type: "info", message: "Disconnected by user" });
   }
 
@@ -263,6 +278,7 @@ export class GanBleLab {
     }
 
     const genLabel = SERVICE_GEN_LABEL[detectedServiceUuid] ?? detectedServiceUuid;
+    this.detectedGenLabel = `GAN ${genLabel} (raw)`;
     this.options.onLog({ type: "service", message: `GAN service found: ${genLabel}` });
 
     // Enumerate all characteristics on this service
@@ -337,6 +353,8 @@ export class GanBleLab {
     const bytes = dataViewToBytes(value);
     const rawHex = toHex(bytes);
     const meta = CHAR_META[uuid] ?? { label: `Unknown (${uuid.slice(4, 8)})`, packetType: "NOTIFY" as const, isTelemetry: false };
+    const highFreq = this.isHighFrequency(uuid);
+    const isTelemetry = meta.isTelemetry || highFreq;
 
     const decryptResult = tryDecryptGen1Packet(bytes, this.gen1DeviceInfo);
 
@@ -345,7 +363,7 @@ export class GanBleLab {
       packetNum: ++this.rowCounter,
       at: Date.now(),
       mode: "raw",
-      packetType: meta.packetType,
+      packetType: highFreq && meta.packetType !== "GYRO" ? "GYRO" : meta.packetType,
       characteristicUuid: uuid,
       rawHex,
       rawByteLength: bytes.length,
@@ -359,12 +377,12 @@ export class GanBleLab {
           : decryptResult.status === "failed"
           ? "failed"
           : "unavailable",
-      meaning: meta.label,
+      meaning: highFreq ? `${meta.label} (high-freq / gyro)` : meta.label,
       transform: null,
       cubeTimestamp: null,
       deviceName: this.deviceName,
-      protocolName: "GAN Gen1 (raw)",
-      isTelemetry: meta.isTelemetry,
+      protocolName: this.detectedGenLabel,
+      isTelemetry,
     };
 
     this.options.onPacketRow(row);
