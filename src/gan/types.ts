@@ -38,6 +38,11 @@ export type PacketRow = {
   deviceName: string | null;
   protocolName: string | null;
   isTelemetry: boolean;
+  saltHex: string | null;
+  finalKeyHex: string | null;
+  finalIvHex: string | null;
+  protocolValid: boolean | null;
+  validationReason: string | null;
 };
 
 // Legacy log entry kept for the diagnostic log panel

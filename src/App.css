@@ -341,6 +341,9 @@ button:disabled { opacity: 0.35; cursor: not-allowed; }
 .col-meaning   { width: 200px; }
 .col-transform { width: 68px;  white-space: nowrap; }
 .col-proto     { width: 130px; white-space: nowrap; }
+.col-valid     { width: 46px;  white-space: nowrap; text-align: center; }
+.col-reason    { width: 180px; }
+.col-cryptohex { width: 80px;  white-space: nowrap; }
 
 /* ── Mono text ─────────────────────────────────────────────────── */
 
@@ -415,6 +418,9 @@ button:disabled { opacity: 0.35; cursor: not-allowed; }
 }
 
 .dim-dash { color: #334155; }
+
+.valid-yes { color: #34d399; font-weight: 700; }
+.valid-no  { color: #f87171; font-weight: 700; }
 
 /* ── Diagnostic log ────────────────────────────────────────────── */
 

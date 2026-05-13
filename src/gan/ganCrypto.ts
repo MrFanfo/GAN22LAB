@@ -1,6 +1,10 @@
 import { AES, ModeOfOperation } from "aes-js";
 import { decompressFromEncodedURIComponent } from "lz-string";
 
+function bytesToHex(b: Uint8Array): string {
+  return Array.from(b).map((x) => x.toString(16).padStart(2, "0")).join(" ");
+}
+
 // GAN Gen1 compressed key blobs (same as library source)
 const GAN_GEN1_COMPRESSED_KEYS = [
   "NoRgnAHANATADDWJYwMxQOxiiEcfYgSK6Hpr4TYCs0IG1OEAbDszALpA",
@@ -61,10 +65,55 @@ export type Gen1DeviceInfo = {
   systemId: DataView | null;
 };
 
+export type Gen234CryptoDebug = {
+  saltHex: string;
+  finalKeyHex: string;
+  finalIvHex: string;
+};
+
 export type GanDecryptResult =
-  | { status: "success"; decryptedBytes: Uint8Array }
-  | { status: "failed"; message: string }
+  | { status: "success"; decryptedBytes: Uint8Array; cryptoDebug?: Gen234CryptoDebug; protocolValid?: boolean; validationReason?: string }
+  | { status: "failed"; message: string; cryptoDebug?: Gen234CryptoDebug }
   | { status: "unavailable"; message: string };
+
+// ── Gen4 packet validation (ported from library source) ────────────────────
+
+class GanBitReader {
+  private readonly bits: string;
+  constructor(message: Uint8Array) {
+    this.bits = Array.from(message, (b) => (b + 256).toString(2).slice(1)).join("");
+  }
+  getBitWord(offset: number, bitLength: number): number {
+    if (bitLength <= 8) return parseInt(this.bits.slice(offset, offset + bitLength), 2);
+    const buf = new Uint8Array(bitLength / 8);
+    for (let i = 0; i < buf.length; i++)
+      buf[i] = parseInt(this.bits.slice(8 * i + offset, 8 * i + offset + 8), 2);
+    const dv = new DataView(buf.buffer);
+    return bitLength === 16 ? dv.getUint16(0, false) : dv.getUint32(0, false);
+  }
+}
+
+const GEN4_VALID_FIRST_BYTES = [1, 209, 237, 236, 239, 234, 250, 251, 252, 253, 254];
+
+function validateGen4Packet(e: Uint8Array): { valid: boolean; reason: string } {
+  if (e.length < 16) return { valid: false, reason: "packet too short" };
+  try {
+    const t = new GanBitReader(e);
+    const firstByte = t.getBitWord(0, 8);
+    if (!GEN4_VALID_FIRST_BYTES.includes(firstByte)) {
+      return { valid: false, reason: `first byte 0x${firstByte.toString(16).padStart(2, "0")} not in valid set` };
+    }
+    if (firstByte === 1) {
+      const face = t.getBitWord(66, 6);
+      if (![2, 32, 8, 1, 16, 4].includes(face)) {
+        return { valid: false, reason: `first byte=0x01 but face bits=${face} invalid` };
+      }
+    }
+    return { valid: true, reason: `first byte 0x${firstByte.toString(16).padStart(2, "0")} valid` };
+  } catch (err) {
+    return { valid: false, reason: err instanceof Error ? err.message : "validation error" };
+  }
+}
 
 // ── Gen2 / Gen3 / Gen4 (AES-128-CBC, salted by MAC) ────────────────────────
 
@@ -77,6 +126,18 @@ function macToSalt(mac: string): Uint8Array | null {
   const bytes = parts.map((p) => parseInt(p, 16));
   if (bytes.some(isNaN)) return null;
   return new Uint8Array(bytes.reverse());
+}
+
+export function deriveGen234CryptoDebug(mac: string): Gen234CryptoDebug | null {
+  const salt = macToSalt(mac);
+  if (!salt) return null;
+  const key = new Uint8Array(GAN_GEN234_BASE_KEY);
+  const iv  = new Uint8Array(GAN_GEN234_BASE_IV);
+  for (let i = 0; i < 6; i++) {
+    key[i] = (GAN_GEN234_BASE_KEY[i]! + salt[i]!) % 0xFF;
+    iv[i]  = (GAN_GEN234_BASE_IV[i]!  + salt[i]!) % 0xFF;
+  }
+  return { saltHex: bytesToHex(salt), finalKeyHex: bytesToHex(key), finalIvHex: bytesToHex(iv) };
 }
 
 function decryptChunk(buf: Uint8Array, offset: number, key: Uint8Array, iv: Uint8Array): void {
@@ -127,15 +188,22 @@ export function tryDecryptGen234Packet(
     iv[i]  = (GAN_GEN234_BASE_IV[i]!  + salt[i]!) % 0xFF;
   }
 
+  const cryptoDebug: Gen234CryptoDebug = {
+    saltHex: bytesToHex(salt),
+    finalKeyHex: bytesToHex(key),
+    finalIvHex: bytesToHex(iv),
+  };
+
   try {
     const result = new Uint8Array(encryptedBytes);
     if (result.length > 16) {
       decryptChunk(result, result.length - 16, key, iv);
     }
     decryptChunk(result, 0, key, iv);
-    return { status: "success", decryptedBytes: result };
+    const { valid, reason } = validateGen4Packet(result);
+    return { status: "success", decryptedBytes: result, cryptoDebug, protocolValid: valid, validationReason: reason };
   } catch (e) {
-    return { status: "failed", message: e instanceof Error ? e.message : "AES decrypt error" };
+    return { status: "failed", message: e instanceof Error ? e.message : "AES decrypt error", cryptoDebug };
   }
 }
 

@@ -140,6 +140,11 @@ export class LibraryConnector {
       deviceName: conn.deviceName,
       protocolName: conn.protocol.name,
       isTelemetry,
+      saltHex: null,
+      finalKeyHex: null,
+      finalIvHex: null,
+      protocolValid: null,
+      validationReason: null,
     };
 
     this.options.onPacketRow(row);

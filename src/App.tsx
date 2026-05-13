@@ -310,6 +310,11 @@ export default function App() {
                   <th className="col-meaning">Meaning</th>
                   <th className="col-transform">Transform</th>
                   <th className="col-proto">Protocol</th>
+                  <th className="col-valid">Valid?</th>
+                  <th className="col-reason">Validation</th>
+                  <th className="col-cryptohex">Salt</th>
+                  <th className="col-cryptohex">Key</th>
+                  <th className="col-cryptohex">IV</th>
                 </tr>
               </thead>
               <tbody>
@@ -366,6 +371,27 @@ export default function App() {
                       </td>
                       <td className="col-proto">
                         {row.protocolName ?? "—"}
+                      </td>
+                      <td className="col-valid">
+                        {row.protocolValid === null ? (
+                          <span className="dim-dash">—</span>
+                        ) : row.protocolValid ? (
+                          <span className="valid-yes">✓</span>
+                        ) : (
+                          <span className="valid-no">✗</span>
+                        )}
+                      </td>
+                      <td className="col-reason mono" title={row.validationReason ?? undefined}>
+                        {row.validationReason ?? "—"}
+                      </td>
+                      <td className="col-cryptohex mono" title={row.saltHex ?? undefined}>
+                        {row.saltHex ? row.saltHex.slice(0, 11) + "…" : "—"}
+                      </td>
+                      <td className="col-cryptohex mono" title={row.finalKeyHex ?? undefined}>
+                        {row.finalKeyHex ? row.finalKeyHex.slice(0, 11) + "…" : "—"}
+                      </td>
+                      <td className="col-cryptohex mono" title={row.finalIvHex ?? undefined}>
+                        {row.finalIvHex ? row.finalIvHex.slice(0, 11) + "…" : "—"}
                       </td>
                     </tr>
                   );

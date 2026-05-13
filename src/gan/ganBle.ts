@@ -9,8 +9,8 @@ import {
 } from "./ganConstants";
 import { chooseMac } from "./mac";
 import { dataViewToBytes, dataViewToHex, tryDecodeUtf8 } from "./hex";
-import { tryDecryptGen1Packet, tryDecryptGen234Packet, classifyGen4Event } from "./ganCrypto";
-import type { Gen1DeviceInfo } from "./ganCrypto";
+import { tryDecryptGen1Packet, tryDecryptGen234Packet, classifyGen4Event, deriveGen234CryptoDebug } from "./ganCrypto";
+import type { Gen1DeviceInfo, Gen234CryptoDebug } from "./ganCrypto";
 import type { BleLogEntry, ConnectionStatus, GanBleLabOptions, PacketRow } from "./types";
 
 // Known characteristic UUID → label / packet type
@@ -51,6 +51,10 @@ export class GanBleLab {
   private detectedGenLabel: string = "GAN (raw)";
   private detectedGen: "gen1" | "gen234" | null = null;
   private chosenMac: string | null = null;
+  private cryptoDebug: Gen234CryptoDebug | null = null;
+  private advManufacturerDataHex: string | null = null;
+  private advMac: string | null = null;
+  private advServiceUuids: string[] = [];
   private rowCounter = 0;
   // Sliding window of recent notification timestamps per characteristic UUID,
   // used to detect high-frequency characteristics (gyro spam ~12 Hz).
@@ -93,12 +97,90 @@ export class GanBleLab {
     this.detectedGenLabel = "GAN (raw)";
     this.detectedGen = null;
     this.chosenMac = null;
+    this.cryptoDebug = null;
+    this.advManufacturerDataHex = null;
+    this.advMac = null;
+    this.advServiceUuids = [];
     this.notifyTimes.clear();
     this.options.onLog({ type: "info", message: "Disconnected by user" });
   }
 
   private setStatus(status: ConnectionStatus) {
     this.options.onLog({ type: "info", message: `Status: ${status}` });
+  }
+
+  private async captureAdvertisementData(device: BluetoothDevice): Promise<void> {
+    if (typeof (device as unknown as { watchAdvertisements?: unknown }).watchAdvertisements !== "function") {
+      this.options.onLog({ type: "info", message: "watchAdvertisements not supported in this browser — advertisement data unavailable" });
+      return;
+    }
+
+    this.options.onLog({ type: "info", message: "Waiting for advertisement packet (up to 5 s)…" });
+
+    await new Promise<void>((resolve) => {
+      const abort = new AbortController();
+      let settled = false;
+
+      const done = () => {
+        if (settled) return;
+        settled = true;
+        device.removeEventListener("advertisementreceived", onAdv as EventListener);
+        abort.abort();
+        resolve();
+      };
+
+      const onAdv = (evt: BluetoothAdvertisingEvent) => {
+        // Extract manufacturer data and MAC (GAN uses CICs with low byte = 0x01)
+        let mfHex: string | null = null;
+        let mac: string | null = null;
+
+        if (evt.manufacturerData) {
+          for (let hi = 0; hi <= 0xFF; hi++) {
+            const cic = (hi << 8) | 0x01;
+            if (evt.manufacturerData.has(cic)) {
+              const dv = evt.manufacturerData.get(cic)!;
+              const raw = new Uint8Array(dv.buffer, dv.byteOffset, dv.byteLength);
+              mfHex = Array.from(raw).map((b) => b.toString(16).padStart(2, "0")).join(" ");
+
+              // MAC is the last 6 bytes of the first 9 bytes, read in reverse
+              const data = new Uint8Array(dv.buffer, dv.byteOffset, Math.min(dv.byteLength, 9));
+              if (data.length >= 6) {
+                const parts: string[] = [];
+                for (let i = 1; i <= 6; i++) parts.push(data[data.length - i]!.toString(16).toUpperCase().padStart(2, "0"));
+                mac = parts.join(":");
+              }
+              break;
+            }
+          }
+        }
+
+        const uuids = evt.uuids ? [...evt.uuids].map(String) : [];
+
+        this.advManufacturerDataHex = mfHex;
+        this.advMac = mac;
+        this.advServiceUuids = uuids;
+
+        this.options.onLog({
+          type: "debug",
+          message: "Advertisement received",
+          data: {
+            manufacturerDataHex: mfHex,
+            macFromManufacturerData: mac,
+            serviceUuids: uuids,
+            rssi: (evt as BluetoothAdvertisingEvent & { rssi?: number }).rssi ?? null,
+          },
+        });
+
+        done();
+      };
+
+      device.addEventListener("advertisementreceived", onAdv as EventListener);
+
+      (device.watchAdvertisements as (opts: { signal: AbortSignal }) => Promise<void>)({ signal: abort.signal })
+        .catch(() => done());
+
+      setTimeout(done, 5000);
+    });
   }
 
   private async connectWithOptions(requestOptions: RequestDeviceOptions): Promise<void> {
@@ -123,9 +205,13 @@ export class GanBleLab {
     this.device = device;
     this.deviceName = device.name ?? null;
 
+    // Capture advertisement data (watchAdvertisements) before GATT connect so the
+    // device is still actively advertising. This gives us manufacturer data and MAC.
+    await this.captureAdvertisementData(device);
+
     const { mac } = chooseMac({
       manualMac: this.options.manualMac,
-      autoMac: null,
+      autoMac: this.advMac,
       preferManualMac: this.options.preferManualMac,
     });
     this.chosenMac = mac;
@@ -133,7 +219,15 @@ export class GanBleLab {
     this.options.onLog({
       type: "device",
       message: "Device selected",
-      data: { name: device.name ?? "(no name)", mac, manualMac: this.options.manualMac },
+      data: {
+        deviceName: device.name ?? "(no name)",
+        advertisementManufacturerDataHex: this.advManufacturerDataHex,
+        macFromManufacturerData: this.advMac,
+        serviceUuids: this.advServiceUuids,
+        cachedMac: null,
+        manualMac: this.options.manualMac ?? null,
+        finalMacUsed: mac,
+      },
     });
 
     device.addEventListener("gattserverdisconnected", () => {
@@ -287,6 +381,28 @@ export class GanBleLab {
     this.detectedGen = detectedServiceUuid === GAN_GEN1_SERVICE ? "gen1" : "gen234";
     this.options.onLog({ type: "service", message: `GAN service found: ${genLabel}` });
 
+    if (this.detectedGen === "gen234" && this.chosenMac) {
+      this.cryptoDebug = deriveGen234CryptoDebug(this.chosenMac) ?? null;
+    }
+
+    this.options.onLog({
+      type: "crypto",
+      message: "Connection crypto debug",
+      data: {
+        deviceName: this.deviceName,
+        serviceUuids: this.advServiceUuids,
+        selectedProtocol: genLabel,
+        advertisementManufacturerDataHex: this.advManufacturerDataHex,
+        macFromManufacturerData: this.advMac,
+        cachedMac: null,
+        manualMac: this.options.manualMac ?? null,
+        finalMacUsed: this.chosenMac,
+        saltHex: this.cryptoDebug?.saltHex ?? null,
+        finalKeyHex: this.cryptoDebug?.finalKeyHex ?? null,
+        finalIvHex: this.cryptoDebug?.finalIvHex ?? null,
+      },
+    });
+
     // Enumerate all characteristics on this service
     let characteristics: BluetoothRemoteGATTCharacteristic[] = [];
     try {
@@ -365,18 +481,26 @@ export class GanBleLab {
     let isTelemetry = meta.isTelemetry;
     let decryptedHex: string | null = null;
     let decryptStatus: PacketRow["decryptStatus"] = "unavailable";
+    let protocolValid: boolean | null = null;
+    let validationReason: string | null = null;
 
     if (this.detectedGen === "gen234") {
       const result = tryDecryptGen234Packet(bytes, this.chosenMac);
       if (result.status === "success") {
         decryptedHex = toHex(result.decryptedBytes);
         decryptStatus = "success";
+        protocolValid = result.protocolValid ?? null;
+        validationReason = result.validationReason ?? null;
         const cls = classifyGen4Event(result.decryptedBytes[0] ?? 0);
         packetType = cls.packetType;
         meaning = cls.meaning;
         isTelemetry = cls.isTelemetry;
       } else {
         decryptStatus = result.status;
+        if (result.status === "failed") {
+          protocolValid = false;
+          validationReason = result.message;
+        }
         // Fall back to rate-based detection when decryption unavailable/failed
         const highFreq = this.isHighFrequency(uuid);
         if (highFreq && packetType !== "GYRO") packetType = "GYRO";
@@ -413,6 +537,11 @@ export class GanBleLab {
       deviceName: this.deviceName,
       protocolName: this.detectedGenLabel,
       isTelemetry,
+      saltHex: this.cryptoDebug?.saltHex ?? null,
+      finalKeyHex: this.cryptoDebug?.finalKeyHex ?? null,
+      finalIvHex: this.cryptoDebug?.finalIvHex ?? null,
+      protocolValid,
+      validationReason,
     };
 
     this.options.onPacketRow(row);
