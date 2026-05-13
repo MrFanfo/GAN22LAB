@@ -152,11 +152,15 @@ export default function App() {
   const isBusy = status === "requesting-device" || status === "connecting";
 
   const macStatusLabel = macEmpty
-    ? "No MAC — Gen1 raw decryption unavailable; library mode auto-detects"
+    ? mode === "library"
+      ? "No MAC — required for GAN Gen2/3/4 (251 UI, 356i v2, etc.); without it the library will fail"
+      : "No MAC — Gen1 raw decryption unavailable"
     : normalizedMac
     ? `MAC: ${normalizedMac} ✓`
     : "Invalid MAC format";
-  const macStatusClass = macEmpty ? "mac-neutral" : normalizedMac ? "mac-valid" : "mac-invalid";
+  const macStatusClass = macEmpty
+    ? mode === "library" ? "mac-warn" : "mac-neutral"
+    : normalizedMac ? "mac-valid" : "mac-invalid";
 
   return (
     <main className="lab-shell">
@@ -174,7 +178,7 @@ export default function App() {
             disabled={isConnected || isBusy}
           >
             Library mode
-            <span className="mode-hint">smartcube-web-bluetooth — full decrypt + event parsing</span>
+            <span className="mode-hint">smartcube-web-bluetooth — full decrypt + events · MAC required for Gen2+</span>
           </button>
           <button
             className={`mode-btn${mode === "raw" ? " active" : ""}`}

@@ -198,10 +198,67 @@ export class GanBleLab {
     }
 
     if (!service || !detectedServiceUuid) {
-      this.options.onLog({
-        type: "error",
-        message: `No GAN service found. Tried: ${ALL_GAN_SERVICE_UUIDS.join(", ")}`,
-      });
+      // Try to enumerate ALL primary services so the user can see what the device actually has
+      let allServices: BluetoothRemoteGATTService[] = [];
+      try {
+        allServices = await this.server.getPrimaryServices();
+      } catch {
+        // browser may block getPrimaryServices() without a UUID arg — ignore
+      }
+
+      if (allServices.length > 0) {
+        const uuids = allServices.map((s) => s.uuid).join(", ");
+        this.options.onLog({
+          type: "error",
+          message: `No known GAN service found on this device. Services actually present: ${uuids}`,
+        });
+        this.options.onLog({
+          type: "warning",
+          message: `To inspect these services, add their UUIDs to the code and reconnect using "Connect (all devices)".`,
+        });
+
+        // For any service UUID we didn't know about, try to list its characteristics
+        // (this will only succeed if the UUID happened to be in optionalServices already)
+        for (const svc of allServices) {
+          if (ALL_GAN_SERVICE_UUIDS.includes(svc.uuid as typeof ALL_GAN_SERVICE_UUIDS[number])) continue;
+          try {
+            const chars = await svc.getCharacteristics();
+            const charUuids = chars.map((c) => `${c.uuid.slice(4, 8)} (${[
+              c.properties.read && "read",
+              c.properties.write && "write",
+              c.properties.notify && "notify",
+              c.properties.indicate && "indicate",
+            ].filter(Boolean).join("|")})`).join(", ");
+            this.options.onLog({
+              type: "service",
+              message: `Unknown service ${svc.uuid}: characteristics → ${charUuids || "(none)"}`,
+            });
+            // Subscribe to any notify/indicate characteristics we find
+            for (const char of chars) {
+              if (char.properties.notify || char.properties.indicate) {
+                try {
+                  await char.startNotifications();
+                  char.addEventListener("characteristicvaluechanged", (event: Event) =>
+                    this.handleNotification(char.uuid, event)
+                  );
+                  this.options.onLog({ type: "info", message: `Subscribed to unknown char ${char.uuid.slice(4, 8)}` });
+                } catch {}
+              }
+            }
+          } catch {
+            // Characteristic access blocked — service not in optionalServices
+            this.options.onLog({
+              type: "warning",
+              message: `Service ${svc.uuid} found but characteristics inaccessible (not in optionalServices). Add this UUID and use "Connect (all devices)" to inspect it.`,
+            });
+          }
+        }
+      } else {
+        this.options.onLog({
+          type: "error",
+          message: `No GAN service found. Tried: ${ALL_GAN_SERVICE_UUIDS.join(", ")}. Could not list device services (browser may require explicit service UUIDs).`,
+        });
+      }
       return;
     }
 

@@ -132,6 +132,7 @@ body {
 .mac-neutral { color: #64748b; }
 .mac-valid   { color: #34d399; }
 .mac-invalid { color: #f87171; }
+.mac-warn    { color: #fbbf24; }
 
 .checkbox-field label {
   display: flex;
