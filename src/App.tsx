@@ -124,9 +124,9 @@ export default function App() {
   const handleExport = useCallback(() => {
     downloadJson(
       `gan251-lab-${new Date().toISOString().replace(/[:.]/g, "-")}.json`,
-      { exportedAt: new Date().toISOString(), mode, rows: packetRows }
+      { exportedAt: new Date().toISOString(), mode, showTelemetry, rows: visibleRows }
     );
-  }, [mode, packetRows]);
+  }, [mode, showTelemetry, visibleRows]);
 
   const visibleRows = useMemo(
     () => (showTelemetry ? packetRows : packetRows.filter((r) => !r.isTelemetry)),
