@@ -24,19 +24,16 @@ jobs:
         with:
           node-version: 20
           cache: npm
-          cache-dependency-path: gan251-lab/package-lock.json
 
       - name: Install dependencies
-        working-directory: gan251-lab
         run: npm ci
 
       - name: Build
-        working-directory: gan251-lab
         run: npm run build
 
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: gan251-lab/dist
+          path: dist
 
   deploy:
     needs: build
