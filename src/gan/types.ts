@@ -8,6 +8,39 @@ export type ConnectionStatus =
 
 export type MacSource = "manual" | "auto" | "missing";
 
+export type ConnectionMode = "raw" | "library";
+
+export type PacketType =
+  | "MOVE"
+  | "GYRO"
+  | "FACELETS"
+  | "BATTERY"
+  | "HARDWARE"
+  | "DISCONNECT"
+  | "NOTIFY";
+
+export type DecryptStatus = "success" | "failed" | "plain" | "unavailable";
+
+export type PacketRow = {
+  id: string;
+  packetNum: number;
+  at: number;
+  mode: ConnectionMode;
+  packetType: PacketType;
+  characteristicUuid: string | null;
+  rawHex: string | null;
+  rawByteLength: number | null;
+  decryptedHex: string | null;
+  decryptStatus: DecryptStatus | null;
+  meaning: string;
+  transform: string | null;
+  cubeTimestamp: number | null;
+  deviceName: string | null;
+  protocolName: string | null;
+  isTelemetry: boolean;
+};
+
+// Legacy log entry kept for the diagnostic log panel
 export type BleLogEntry = {
   id: string;
   timestamp: string;
@@ -25,14 +58,14 @@ export type BleLogEntry = {
     | "crypto"
     | "debug";
   message: string;
-  expectedMoveLabel?: string;
   data?: unknown;
 };
 
 export type GanBleLabOptions = {
   manualMac: string | null;
   preferManualMac: boolean;
-  expectedMoveLabelGetter: () => string;
+  onPacketRow: (row: PacketRow) => void;
+  onLog: (entry: Omit<BleLogEntry, "id" | "timestamp">) => void;
 };
 
 export type GanCharacteristicProperties = {
@@ -41,21 +74,4 @@ export type GanCharacteristicProperties = {
   writeWithoutResponse: boolean;
   notify: boolean;
   indicate: boolean;
-};
-
-export type NotificationLogData = {
-  characteristicUuid: string;
-  byteLength: number;
-  rawHex: string;
-  changedBytes: Array<{
-    index: number;
-    previous: string | null;
-    current: string;
-  }>;
-  expectedMoveLabel: string;
-  mac: string | null;
-  macSource: MacSource;
-  decryptedHex?: string;
-  decryptStatus?: "not-implemented" | "success" | "failed";
-  decryptError?: string;
 };

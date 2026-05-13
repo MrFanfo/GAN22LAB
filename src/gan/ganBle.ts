@@ -5,22 +5,34 @@ import {
   DEVICE_INFO_CHARACTERISTICS,
 } from "./ganConstants";
 import { chooseMac } from "./mac";
-import { dataViewToBytes, dataViewToHex, diffBytes, tryDecodeUtf8 } from "./hex";
-import { tryDecryptGanPacket } from "./ganCrypto";
-import type { BleLogEntry, ConnectionStatus, GanBleLabOptions } from "./types";
+import { dataViewToBytes, dataViewToHex, tryDecodeUtf8 } from "./hex";
+import { tryDecryptGen1Packet } from "./ganCrypto";
+import type { Gen1DeviceInfo } from "./ganCrypto";
+import type { BleLogEntry, ConnectionStatus, GanBleLabOptions, PacketRow } from "./types";
+
+// Map GAN Gen1 characteristic UUID → label / packet type / telemetry flag
+const CHAR_META: Record<string, { label: string; packetType: PacketRow["packetType"]; isTelemetry: boolean }> = {
+  "0000fff2-0000-1000-8000-00805f9b34fb": { label: "Facelets state",        packetType: "FACELETS",  isTelemetry: false },
+  "0000fff4-0000-1000-8000-00805f9b34fb": { label: "Gyro data",             packetType: "GYRO",      isTelemetry: true  },
+  "0000fff5-0000-1000-8000-00805f9b34fb": { label: "Cube state / moves",    packetType: "MOVE",      isTelemetry: false },
+  "0000fff6-0000-1000-8000-00805f9b34fb": { label: "Move counter",          packetType: "NOTIFY",    isTelemetry: false },
+  "0000fff7-0000-1000-8000-00805f9b34fb": { label: "Battery status",        packetType: "BATTERY",   isTelemetry: true  },
+};
+
+function toHex(bytes: Uint8Array): string {
+  return Array.from(bytes)
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join(" ");
+}
 
 export class GanBleLab {
   private device: BluetoothDevice | null = null;
   private server: BluetoothRemoteGATTServer | null = null;
-  private previousNotificationByCharacteristic = new Map<string, Uint8Array>();
-  private deviceInfo: Record<string, unknown> = {};
-  private autoMac: string | null = null;
+  private gen1DeviceInfo: Gen1DeviceInfo = { firmwareRevision: null, systemId: null };
+  private deviceName: string | null = null;
+  private rowCounter = 0;
 
-  constructor(
-    private log: (entry: Omit<BleLogEntry, "id" | "timestamp">) => void,
-    private setStatus: (status: ConnectionStatus) => void,
-    private options: GanBleLabOptions
-  ) {}
+  constructor(private options: GanBleLabOptions) {}
 
   async connectNormal(): Promise<void> {
     await this.connectWithOptions({
@@ -42,72 +54,67 @@ export class GanBleLab {
     }
     this.device = null;
     this.server = null;
-    this.previousNotificationByCharacteristic.clear();
-    this.setStatus("disconnected");
-    this.log({ type: "info", message: "Disconnected by user" });
+    this.gen1DeviceInfo = { firmwareRevision: null, systemId: null };
+    this.deviceName = null;
+    this.options.onLog({ type: "info", message: "Disconnected by user" });
   }
 
-  private async connectWithOptions(
-    requestOptions: RequestDeviceOptions
-  ): Promise<void> {
+  private setStatus(status: ConnectionStatus) {
+    this.options.onLog({ type: "info", message: `Status: ${status}` });
+  }
+
+  private async connectWithOptions(requestOptions: RequestDeviceOptions): Promise<void> {
     this.setStatus("requesting-device");
-    this.previousNotificationByCharacteristic.clear();
-    this.deviceInfo = {};
-    this.autoMac = null;
+    this.gen1DeviceInfo = { firmwareRevision: null, systemId: null };
+    this.deviceName = null;
 
     let device: BluetoothDevice;
     try {
       device = await navigator.bluetooth.requestDevice(requestOptions);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      if (msg.includes("User cancelled") || msg.includes("cancelled")) {
-        this.log({ type: "info", message: "Bluetooth picker cancelled by user" });
+      if (msg.includes("cancelled") || msg.includes("User cancelled")) {
+        this.options.onLog({ type: "info", message: "Bluetooth picker cancelled" });
       } else {
-        this.log({ type: "error", message: `requestDevice failed: ${msg}` });
+        this.options.onLog({ type: "error", message: `requestDevice failed: ${msg}` });
       }
       this.setStatus("disconnected");
       return;
     }
 
     this.device = device;
+    this.deviceName = device.name ?? null;
 
-    const { mac, source } = chooseMac({
+    const { mac } = chooseMac({
       manualMac: this.options.manualMac,
-      autoMac: this.autoMac,
+      autoMac: null,
       preferManualMac: this.options.preferManualMac,
     });
 
-    this.log({
+    this.options.onLog({
       type: "device",
       message: "Device selected",
-      data: {
-        name: device.name ?? "(no name)",
-        browserDeviceId: device.id,
-        manualMac: this.options.manualMac,
-        preferManualMac: this.options.preferManualMac,
-        chosenMac: mac,
-        macSource: source,
-      },
+      data: { name: device.name ?? "(no name)", mac, manualMac: this.options.manualMac },
     });
 
     device.addEventListener("gattserverdisconnected", () => {
       this.setStatus("disconnected-by-device");
-      this.log({ type: "info", message: "Device disconnected by device/browser" });
+      this.options.onLog({ type: "info", message: "Device disconnected" });
     });
 
     this.setStatus("connecting");
     try {
-      if (!device.gatt) throw new Error("No GATT on this device");
+      if (!device.gatt) throw new Error("No GATT");
       this.server = await device.gatt.connect();
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      this.log({ type: "error", message: `GATT connect failed: ${msg}` });
+      this.options.onLog({ type: "error", message: `GATT connect failed: ${msg}` });
       this.setStatus("error");
       return;
     }
 
     this.setStatus("connected");
-    this.log({ type: "info", message: "GATT connected" });
+    this.options.onLog({ type: "info", message: "GATT connected" });
 
     await this.readDeviceInfoService();
     await this.inspectGanServiceAndStartNotifications();
@@ -119,12 +126,9 @@ export class GanBleLab {
     let service: BluetoothRemoteGATTService;
     try {
       service = await this.server.getPrimaryService(DEVICE_INFO_SERVICE_UUID);
-      this.log({ type: "service", message: "Device Information service found" });
+      this.options.onLog({ type: "service", message: "Device Information service found" });
     } catch {
-      this.log({
-        type: "warning",
-        message: "Device Information service not available (0x180A)",
-      });
+      this.options.onLog({ type: "warning", message: "Device Information service not available (0x180A)" });
       return;
     }
 
@@ -133,16 +137,26 @@ export class GanBleLab {
         const char = await service.getCharacteristic(uuid);
         if (!char.properties.read) continue;
         const value = await char.readValue();
+
+        // Store raw DataViews needed for Gen1 key derivation
+        if (name === "softwareRevision") {
+          // 0x2a28 = firmware revision = fwVersion bytes
+          this.gen1DeviceInfo.firmwareRevision = value;
+        }
+        if (name === "systemId") {
+          // 0x2a23 = system ID = hardware bytes for key derivation
+          this.gen1DeviceInfo.systemId = value;
+        }
+
         const hex = dataViewToHex(value);
         const text = tryDecodeUtf8(value);
-        this.deviceInfo[name] = text ?? hex;
-        this.log({
+        this.options.onLog({
           type: "read",
           message: `Device info: ${name}`,
           data: { uuid, hex, text },
         });
       } catch {
-        // Characteristic simply not present — not an error
+        // Characteristic not present
       }
     }
   }
@@ -153,10 +167,10 @@ export class GanBleLab {
     let service: BluetoothRemoteGATTService;
     try {
       service = await this.server.getPrimaryService(GAN_SERVICE_UUID);
-      this.log({ type: "service", message: "GAN service found", data: { uuid: GAN_SERVICE_UUID } });
+      this.options.onLog({ type: "service", message: "GAN service found" });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      this.log({ type: "error", message: `GAN service not found: ${msg}` });
+      this.options.onLog({ type: "error", message: `GAN service not found: ${msg}` });
       return;
     }
 
@@ -165,11 +179,7 @@ export class GanBleLab {
         await this.inspectCharacteristic(service, uuid);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        this.log({
-          type: "warning",
-          message: `Error inspecting characteristic ${uuid}: ${msg}`,
-          data: { uuid },
-        });
+        this.options.onLog({ type: "warning", message: `Error on ${uuid}: ${msg}` });
       }
     }
   }
@@ -182,69 +192,39 @@ export class GanBleLab {
     try {
       char = await service.getCharacteristic(uuid);
     } catch {
-      this.log({
-        type: "info",
-        message: `Characteristic not found: ${uuid}`,
-        data: { uuid },
-      });
       return;
     }
 
-    const props = {
-      read: char.properties.read,
-      write: char.properties.write,
-      writeWithoutResponse: char.properties.writeWithoutResponse,
-      notify: char.properties.notify,
-      indicate: char.properties.indicate,
-    };
-
-    this.log({
+    this.options.onLog({
       type: "characteristic",
-      message: "Characteristic found",
-      data: { uuid, properties: props },
+      message: `Characteristic ${uuid.slice(4, 8)}`,
+      data: {
+        read: char.properties.read,
+        notify: char.properties.notify,
+        indicate: char.properties.indicate,
+      },
     });
 
     if (char.properties.read) {
       try {
         const value = await char.readValue();
-        const hex = dataViewToHex(value);
-        const text = tryDecodeUtf8(value);
-        this.log({
+        this.options.onLog({
           type: "read",
-          message: `Read value from ${uuid}`,
-          data: { uuid, hex, byteLength: value.byteLength, text },
+          message: `Read ${uuid.slice(4, 8)}: ${dataViewToHex(value)}`,
         });
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        this.log({
-          type: "warning",
-          message: `Read failed on ${uuid}: ${msg}`,
-          data: { uuid },
-        });
-      }
+      } catch {}
     }
 
     if (char.properties.notify || char.properties.indicate) {
       try {
         await char.startNotifications();
-        char.addEventListener(
-          "characteristicvaluechanged",
-          (event: Event) => {
-            this.handleNotification(uuid, event);
-          }
-        );
-        this.log({
-          type: "info",
-          message: `Notifications started on ${uuid}`,
-          data: { uuid },
+        char.addEventListener("characteristicvaluechanged", (event: Event) => {
+          this.handleNotification(uuid, event);
         });
+        this.options.onLog({ type: "info", message: `Notifications started on ${uuid.slice(4, 8)}` });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        this.log({
-          type: "error",
-          message: `Failed to start notifications on ${uuid}: ${msg}`,
-          data: { uuid },
-        });
+        this.options.onLog({ type: "error", message: `Notifications failed on ${uuid.slice(4, 8)}: ${msg}` });
       }
     }
   }
@@ -255,52 +235,41 @@ export class GanBleLab {
     if (!value) return;
 
     const bytes = dataViewToBytes(value);
-    const rawHex = dataViewToHex(value);
-    const previous = this.previousNotificationByCharacteristic.get(uuid) ?? null;
-    const changedBytes = diffBytes(previous, bytes);
-    this.previousNotificationByCharacteristic.set(uuid, bytes.slice());
+    const rawHex = toHex(bytes);
+    const meta = CHAR_META[uuid] ?? { label: `Unknown (${uuid.slice(4, 8)})`, packetType: "NOTIFY" as const, isTelemetry: false };
 
-    const expectedMoveLabel = this.options.expectedMoveLabelGetter();
+    const decryptResult = tryDecryptGen1Packet(bytes, this.gen1DeviceInfo);
 
-    const { mac, source: macSource } = chooseMac({
-      manualMac: this.options.manualMac,
-      autoMac: this.autoMac,
-      preferManualMac: this.options.preferManualMac,
-    });
+    const row: PacketRow = {
+      id: crypto.randomUUID(),
+      packetNum: ++this.rowCounter,
+      at: Date.now(),
+      mode: "raw",
+      packetType: meta.packetType,
+      characteristicUuid: uuid,
+      rawHex,
+      rawByteLength: bytes.length,
+      decryptedHex:
+        decryptResult.status === "success"
+          ? toHex(decryptResult.decryptedBytes)
+          : null,
+      decryptStatus:
+        decryptResult.status === "success"
+          ? "success"
+          : decryptResult.status === "failed"
+          ? "failed"
+          : "unavailable",
+      meaning: meta.label,
+      transform: null,
+      cubeTimestamp: null,
+      deviceName: this.deviceName,
+      protocolName: "GAN Gen1 (raw)",
+      isTelemetry: meta.isTelemetry,
+    };
 
-    tryDecryptGanPacket({
-      encryptedBytes: bytes,
-      mac,
-      macSource,
-      deviceInfo: this.deviceInfo,
-    }).then((decryptResult) => {
-      const data: Record<string, unknown> = {
-        characteristicUuid: uuid,
-        byteLength: bytes.length,
-        rawHex,
-        changedBytes,
-        expectedMoveLabel,
-        mac,
-        macSource,
-        decryptStatus: decryptResult.status,
-      };
-
-      if (decryptResult.status === "success" && decryptResult.decryptedBytes) {
-        data.decryptedHex = decryptResult.decryptedBytes
-          .reduce((acc, b) => acc + b.toString(16).padStart(2, "0") + " ", "")
-          .trim();
-      }
-
-      if (decryptResult.status === "failed") {
-        data.decryptError = decryptResult.message;
-      }
-
-      this.log({
-        type: "notification",
-        message: "Notification received",
-        expectedMoveLabel,
-        data,
-      });
-    });
+    this.options.onPacketRow(row);
   }
 }
+
+// Re-export type for use in App.tsx
+export type { BleLogEntry };
