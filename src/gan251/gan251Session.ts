@@ -63,8 +63,7 @@ export class Gan251Session {
     const rawHex = gan251BytesToHex(rawPacket);
     try {
       const { decrypted, cryptoDebug } = decryptGan251NotifyPacket(rawPacket, this.mac);
-      const trimmed = trimGan251TrailingZeros(decrypted);
-      const decoded = decodeGan251DecryptedPacket(trimmed, rawHex);
+      const decoded = this.decodeWithCarefulTrim(decrypted, rawHex);
       decoded.cryptoDebug = cryptoDebug;
       decoded.rawBytes = Array.from(rawPacket);
       this.applyDecodedPacket(decoded);
@@ -91,12 +90,37 @@ export class Gan251Session {
   }
 
   processDecryptedPacket(decryptedPacket: Uint8Array, rawHex = ""): Gan251DecodedPacket {
-    const trimmed = trimGan251TrailingZeros(decryptedPacket);
-    const decoded = decodeGan251DecryptedPacket(trimmed, rawHex);
+    const decoded = this.decodeWithCarefulTrim(decryptedPacket, rawHex);
     this.applyDecodedPacket(decoded);
     decoded.virtualCubeFacelets24 = this.getFacelets24();
     this.emitDebug(decoded, rawHex);
     return decoded;
+  }
+
+  private decodeWithCarefulTrim(decryptedPacket: Uint8Array, rawHex: string): Gan251DecodedPacket {
+    const trimmed = trimGan251TrailingZeros(decryptedPacket);
+    const trimmedCount = decryptedPacket.length - trimmed.length;
+    const trimmedDecoded = decodeGan251DecryptedPacket(trimmed, rawHex);
+
+    if (trimmedCount === 0) {
+      return trimmedDecoded;
+    }
+
+    if (trimmedDecoded.crcValid === true) {
+      trimmedDecoded.validationReason += `; trimmed ${trimmedCount} trailing zero byte(s) before CRC`;
+      return trimmedDecoded;
+    }
+
+    const untrimmedDecoded = decodeGan251DecryptedPacket(decryptedPacket, rawHex);
+    if (untrimmedDecoded.crcValid === true) {
+      untrimmedDecoded.validationReason +=
+        `; retained trailing zero byte(s) because they are part of the CRC/payload`;
+      return untrimmedDecoded;
+    }
+
+    trimmedDecoded.validationReason +=
+      `; tried untrimmed ${decryptedPacket.length}-byte candidate too: ${untrimmedDecoded.validationReason}`;
+    return trimmedDecoded;
   }
 
   private applyDecodedPacket(decoded: Gan251DecodedPacket): void {
