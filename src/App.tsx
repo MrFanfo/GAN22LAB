@@ -37,6 +37,93 @@ function downloadJson(filename: string, payload: unknown) {
 }
 
 const MAX_ROWS = 2000;
+const SOLVED_2X2_FACELETS = "UUUURRRRFFFFDDDDLLLLBBBB";
+const FACE_ORDER = ["U", "R", "F", "D", "L", "B"] as const;
+const FACE_COLOR_CLASS: Record<(typeof FACE_ORDER)[number], string> = {
+  U: "face-u",
+  R: "face-r",
+  F: "face-f",
+  D: "face-d",
+  L: "face-l",
+  B: "face-b",
+};
+
+function splitFacelets24(facelets24: string): Record<(typeof FACE_ORDER)[number], string[]> {
+  const padded = (facelets24 + SOLVED_2X2_FACELETS).slice(0, 24);
+  return {
+    U: padded.slice(0, 4).split(""),
+    R: padded.slice(4, 8).split(""),
+    F: padded.slice(8, 12).split(""),
+    D: padded.slice(12, 16).split(""),
+    L: padded.slice(16, 20).split(""),
+    B: padded.slice(20, 24).split(""),
+  };
+}
+
+function Virtual2x2Panel({
+  facelets24,
+  source,
+}: {
+  facelets24: string;
+  source: PacketRow | null;
+}) {
+  const faces = splitFacelets24(facelets24);
+  return (
+    <section className="lab-panel virtual-cube-panel">
+      <div className="virtual-cube-head">
+        <div>
+          <h2>Virtual 2x2 State</h2>
+          <p>
+            {source
+              ? `Updated by packet #${source.packetNum}: ${source.decodedSummary ?? source.meaning}`
+              : "Waiting for decoded GAN251 Raw BLE packets."}
+          </p>
+        </div>
+        <span className="virtual-facelets mono">{facelets24}</span>
+      </div>
+      <div className="cube-net-2x2" aria-label="Virtual 2x2 cube net">
+        <div className="net-spacer" />
+        <FaceBlock face="U" stickers={faces.U} />
+        <div className="net-spacer" />
+        <FaceBlock face="L" stickers={faces.L} />
+        <FaceBlock face="F" stickers={faces.F} />
+        <FaceBlock face="R" stickers={faces.R} />
+        <FaceBlock face="B" stickers={faces.B} />
+        <div className="net-spacer" />
+        <FaceBlock face="D" stickers={faces.D} />
+        <div className="net-spacer" />
+      </div>
+    </section>
+  );
+}
+
+function FaceBlock({
+  face,
+  stickers,
+}: {
+  face: (typeof FACE_ORDER)[number];
+  stickers: string[];
+}) {
+  return (
+    <div className="cube-face-2x2" data-face={face}>
+      <span className="cube-face-label">{face}</span>
+      <div className="cube-face-stickers">
+        {stickers.map((sticker, index) => {
+          const faceKey = FACE_ORDER.includes(sticker as (typeof FACE_ORDER)[number])
+            ? sticker as (typeof FACE_ORDER)[number]
+            : face;
+          return (
+            <span
+              key={`${face}-${index}`}
+              className={`cube-sticker ${FACE_COLOR_CLASS[faceKey]}`}
+              title={`${face}${index}: ${sticker}`}
+            />
+          );
+        })}
+      </div>
+    </div>
+  );
+}
 
 // ── Component ───────────────────────────────────────────────────────────────
 
@@ -148,6 +235,12 @@ export default function App() {
     return c;
   }, [packetRows]);
 
+  const latestVirtualRow = useMemo(
+    () => packetRows.find((row) => row.facelets24) ?? null,
+    [packetRows]
+  );
+  const latestFacelets24 = latestVirtualRow?.facelets24 ?? SOLVED_2X2_FACELETS;
+
   const isConnected = status === "connected";
   const isBusy = status === "requesting-device" || status === "connecting";
 
@@ -252,6 +345,8 @@ export default function App() {
           <span className="mode-badge">{mode === "library" ? "Library" : "Raw BLE"}</span>
         </div>
       </section>
+
+      <Virtual2x2Panel facelets24={latestFacelets24} source={latestVirtualRow} />
 
       {/* Packet table */}
       <section className="lab-panel">
