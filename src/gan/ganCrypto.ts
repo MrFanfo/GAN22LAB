@@ -66,7 +66,10 @@ export type Gen1DeviceInfo = {
 };
 
 export type Gen234CryptoDebug = {
+  profile: string;
   saltHex: string;
+  baseKeyHex: string;
+  baseIvHex: string;
   finalKeyHex: string;
   finalIvHex: string;
 };
@@ -120,6 +123,44 @@ function validateGen4Packet(e: Uint8Array): { valid: boolean; reason: string } {
 const GAN_GEN234_BASE_KEY = [0x01,0x02,0x42,0x28,0x31,0x91,0x16,0x07,0x20,0x05,0x18,0x54,0x42,0x11,0x12,0x53] as const;
 const GAN_GEN234_BASE_IV  = [0x11,0x03,0x32,0x28,0x21,0x01,0x76,0x27,0x20,0x95,0x78,0x14,0x32,0x12,0x02,0x43] as const;
 
+const GAN251_UI_BASE_KEY = [0x58,0x98,0x61,0xfc,0x1f,0xec,0xd7,0x60,0x9f,0x85,0xd3,0x62,0xbe,0x37,0x17,0x2c] as const;
+const GAN251_UI_BASE_IV  = [0x7f,0x61,0xd0,0x52,0x75,0xc1,0x39,0x52,0x08,0x2e,0x54,0x1d,0x8a,0x78,0x63,0x4d] as const;
+
+export type Gen234CryptoProfileId = "default-gen234" | "gan251-ui-v3-2";
+
+type Gen234CryptoProfile = {
+  id: Gen234CryptoProfileId;
+  label: string;
+  baseKey: readonly number[];
+  baseIv: readonly number[];
+  trimTrailingZeros: boolean;
+};
+
+const GEN234_CRYPTO_PROFILES: Record<Gen234CryptoProfileId, Gen234CryptoProfile> = {
+  "default-gen234": {
+    id: "default-gen234",
+    label: "GAN public Gen2/3/4",
+    baseKey: GAN_GEN234_BASE_KEY,
+    baseIv: GAN_GEN234_BASE_IV,
+    trimTrailingZeros: false,
+  },
+  "gan251-ui-v3-2": {
+    id: "gan251-ui-v3-2",
+    label: "GAN251 UI V3-2",
+    baseKey: GAN251_UI_BASE_KEY,
+    baseIv: GAN251_UI_BASE_IV,
+    trimTrailingZeros: true,
+  },
+};
+
+export function detectGen234CryptoProfile(deviceName: string | null | undefined): Gen234CryptoProfileId {
+  const name = (deviceName ?? "").trim().toLowerCase();
+  if (name.startsWith("gan251ui_") || name.startsWith("ganic251_")) {
+    return "gan251-ui-v3-2";
+  }
+  return "default-gen234";
+}
+
 function macToSalt(mac: string): Uint8Array | null {
   const parts = mac.split(":");
   if (parts.length !== 6) return null;
@@ -128,16 +169,37 @@ function macToSalt(mac: string): Uint8Array | null {
   return new Uint8Array(bytes.reverse());
 }
 
-export function deriveGen234CryptoDebug(mac: string): Gen234CryptoDebug | null {
+function deriveRuntimeKeyIv(
+  mac: string,
+  profileId: Gen234CryptoProfileId = "default-gen234",
+): { salt: Uint8Array; key: Uint8Array; iv: Uint8Array; profile: Gen234CryptoProfile } | null {
   const salt = macToSalt(mac);
   if (!salt) return null;
-  const key = new Uint8Array(GAN_GEN234_BASE_KEY);
-  const iv  = new Uint8Array(GAN_GEN234_BASE_IV);
+  const profile = GEN234_CRYPTO_PROFILES[profileId];
+  const key = new Uint8Array(profile.baseKey);
+  const iv  = new Uint8Array(profile.baseIv);
   for (let i = 0; i < 6; i++) {
-    key[i] = (GAN_GEN234_BASE_KEY[i]! + salt[i]!) % 0xFF;
-    iv[i]  = (GAN_GEN234_BASE_IV[i]!  + salt[i]!) % 0xFF;
+    key[i] = (profile.baseKey[i]! + salt[i]!) % 0xFF;
+    iv[i]  = (profile.baseIv[i]!  + salt[i]!) % 0xFF;
   }
-  return { saltHex: bytesToHex(salt), finalKeyHex: bytesToHex(key), finalIvHex: bytesToHex(iv) };
+  return { salt, key, iv, profile };
+}
+
+export function deriveGen234CryptoDebug(
+  mac: string,
+  profileId: Gen234CryptoProfileId = "default-gen234",
+): Gen234CryptoDebug | null {
+  const derived = deriveRuntimeKeyIv(mac, profileId);
+  if (!derived) return null;
+  const { salt, key, iv, profile } = derived;
+  return {
+    profile: profile.label,
+    saltHex: bytesToHex(salt),
+    baseKeyHex: bytesToHex(new Uint8Array(profile.baseKey)),
+    baseIvHex: bytesToHex(new Uint8Array(profile.baseIv)),
+    finalKeyHex: bytesToHex(key),
+    finalIvHex: bytesToHex(iv),
+  };
 }
 
 function decryptChunk(buf: Uint8Array, offset: number, key: Uint8Array, iv: Uint8Array): void {
@@ -145,6 +207,12 @@ function decryptChunk(buf: Uint8Array, offset: number, key: Uint8Array, iv: Uint
   const cipher = new ModeOfOperation.cbc(key, iv);
   const chunk = cipher.decrypt(buf.subarray(offset, offset + 16));
   buf.set(chunk, offset);
+}
+
+function trimTrailingZeros(bytes: Uint8Array): Uint8Array {
+  let end = bytes.length;
+  while (end > 0 && bytes[end - 1] === 0) end--;
+  return end === bytes.length ? bytes : bytes.slice(0, end);
 }
 
 export type Gen234EventClassification = {
@@ -170,26 +238,24 @@ export function classifyGen4Event(eventByte: number): Gen234EventClassification 
 
 export function tryDecryptGen234Packet(
   encryptedBytes: Uint8Array,
-  mac: string | null
+  mac: string | null,
+  profileId: Gen234CryptoProfileId = "default-gen234",
 ): GanDecryptResult {
   if (!mac) {
     return { status: "unavailable", message: "MAC required for Gen2/3/4 decryption" };
   }
 
-  const salt = macToSalt(mac);
-  if (!salt) {
+  const derived = deriveRuntimeKeyIv(mac, profileId);
+  if (!derived) {
     return { status: "failed", message: `Invalid MAC: ${mac}` };
   }
-
-  const key = new Uint8Array(GAN_GEN234_BASE_KEY);
-  const iv  = new Uint8Array(GAN_GEN234_BASE_IV);
-  for (let i = 0; i < 6; i++) {
-    key[i] = (GAN_GEN234_BASE_KEY[i]! + salt[i]!) % 0xFF;
-    iv[i]  = (GAN_GEN234_BASE_IV[i]!  + salt[i]!) % 0xFF;
-  }
+  const { salt, key, iv, profile } = derived;
 
   const cryptoDebug: Gen234CryptoDebug = {
+    profile: profile.label,
     saltHex: bytesToHex(salt),
+    baseKeyHex: bytesToHex(new Uint8Array(profile.baseKey)),
+    baseIvHex: bytesToHex(new Uint8Array(profile.baseIv)),
     finalKeyHex: bytesToHex(key),
     finalIvHex: bytesToHex(iv),
   };
@@ -200,8 +266,16 @@ export function tryDecryptGen234Packet(
       decryptChunk(result, result.length - 16, key, iv);
     }
     decryptChunk(result, 0, key, iv);
-    const { valid, reason } = validateGen4Packet(result);
-    return { status: "success", decryptedBytes: result, cryptoDebug, protocolValid: valid, validationReason: reason };
+    const processed = profile.trimTrailingZeros ? trimTrailingZeros(result) : result;
+    const { valid, reason } = validateGen4Packet(processed);
+    const trimNote = processed.length === result.length ? "" : `; trimmed ${result.length - processed.length} trailing zero byte(s)`;
+    return {
+      status: "success",
+      decryptedBytes: processed,
+      cryptoDebug,
+      protocolValid: valid,
+      validationReason: `${profile.label}: ${reason}${trimNote}`,
+    };
   } catch (e) {
     return { status: "failed", message: e instanceof Error ? e.message : "AES decrypt error", cryptoDebug };
   }

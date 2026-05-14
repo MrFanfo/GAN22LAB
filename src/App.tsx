@@ -154,7 +154,7 @@ export default function App() {
   const macStatusLabel = macEmpty
     ? mode === "library"
       ? "No MAC — required for GAN Gen2/3/4 (251 UI, 356i v2, etc.); without it the library will fail"
-      : "No MAC — Gen1 raw decryption unavailable"
+      : "No MAC — raw GAN packet decryption unavailable"
     : normalizedMac
     ? `MAC: ${normalizedMac} ✓`
     : "Invalid MAC format";
@@ -186,7 +186,7 @@ export default function App() {
             disabled={isConnected || isBusy}
           >
             Raw BLE mode
-            <span className="mode-hint">Direct Web Bluetooth — Gen1 AES decrypt via key derivation</span>
+            <span className="mode-hint">Direct Web Bluetooth — Gen1 + GAN251 UI V3-2 AES decrypt</span>
           </button>
         </div>
       </section>
@@ -198,7 +198,7 @@ export default function App() {
         <div className="field">
           <label htmlFor="macInput">
             Cube MAC address
-            <span className="field-hint"> (required for GAN raw decryption &amp; Gen2+ library mode)</span>
+            <span className="field-hint"> (required for GAN251 UI raw decrypt &amp; Gen2+ library mode)</span>
           </label>
           <input
             id="macInput"

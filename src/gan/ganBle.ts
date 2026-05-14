@@ -9,8 +9,14 @@ import {
 } from "./ganConstants";
 import { chooseMac } from "./mac";
 import { dataViewToBytes, dataViewToHex, tryDecodeUtf8 } from "./hex";
-import { tryDecryptGen1Packet, tryDecryptGen234Packet, classifyGen4Event, deriveGen234CryptoDebug } from "./ganCrypto";
-import type { Gen1DeviceInfo, Gen234CryptoDebug } from "./ganCrypto";
+import {
+  tryDecryptGen1Packet,
+  tryDecryptGen234Packet,
+  classifyGen4Event,
+  deriveGen234CryptoDebug,
+  detectGen234CryptoProfile,
+} from "./ganCrypto";
+import type { Gen1DeviceInfo, Gen234CryptoDebug, Gen234CryptoProfileId } from "./ganCrypto";
 import type { BleLogEntry, ConnectionStatus, GanBleLabOptions, PacketRow } from "./types";
 
 // Known characteristic UUID → label / packet type
@@ -50,6 +56,7 @@ export class GanBleLab {
   private deviceName: string | null = null;
   private detectedGenLabel: string = "GAN (raw)";
   private detectedGen: "gen1" | "gen234" | null = null;
+  private cryptoProfile: Gen234CryptoProfileId = "default-gen234";
   private chosenMac: string | null = null;
   private cryptoDebug: Gen234CryptoDebug | null = null;
   private advManufacturerDataHex: string | null = null;
@@ -96,6 +103,7 @@ export class GanBleLab {
     this.deviceName = null;
     this.detectedGenLabel = "GAN (raw)";
     this.detectedGen = null;
+    this.cryptoProfile = "default-gen234";
     this.chosenMac = null;
     this.cryptoDebug = null;
     this.advManufacturerDataHex = null;
@@ -204,6 +212,7 @@ export class GanBleLab {
 
     this.device = device;
     this.deviceName = device.name ?? null;
+    this.cryptoProfile = detectGen234CryptoProfile(this.deviceName);
 
     // Capture advertisement data (watchAdvertisements) before GATT connect so the
     // device is still actively advertising. This gives us manufacturer data and MAC.
@@ -227,6 +236,7 @@ export class GanBleLab {
         cachedMac: null,
         manualMac: this.options.manualMac ?? null,
         finalMacUsed: mac,
+        rawCryptoProfile: this.cryptoProfile,
       },
     });
 
@@ -377,12 +387,13 @@ export class GanBleLab {
     }
 
     const genLabel = SERVICE_GEN_LABEL[detectedServiceUuid] ?? detectedServiceUuid;
-    this.detectedGenLabel = `GAN ${genLabel} (raw)`;
+    const profileLabel = this.cryptoProfile === "gan251-ui-v3-2" ? " / GAN251 UI V3-2" : "";
+    this.detectedGenLabel = `GAN ${genLabel}${profileLabel} (raw)`;
     this.detectedGen = detectedServiceUuid === GAN_GEN1_SERVICE ? "gen1" : "gen234";
     this.options.onLog({ type: "service", message: `GAN service found: ${genLabel}` });
 
     if (this.detectedGen === "gen234" && this.chosenMac) {
-      this.cryptoDebug = deriveGen234CryptoDebug(this.chosenMac) ?? null;
+      this.cryptoDebug = deriveGen234CryptoDebug(this.chosenMac, this.cryptoProfile) ?? null;
     }
 
     this.options.onLog({
@@ -397,7 +408,11 @@ export class GanBleLab {
         cachedMac: null,
         manualMac: this.options.manualMac ?? null,
         finalMacUsed: this.chosenMac,
+        rawCryptoProfile: this.cryptoProfile,
+        cryptoProfileLabel: this.cryptoDebug?.profile ?? null,
         saltHex: this.cryptoDebug?.saltHex ?? null,
+        baseKeyHex: this.cryptoDebug?.baseKeyHex ?? null,
+        baseIvHex: this.cryptoDebug?.baseIvHex ?? null,
         finalKeyHex: this.cryptoDebug?.finalKeyHex ?? null,
         finalIvHex: this.cryptoDebug?.finalIvHex ?? null,
       },
@@ -485,12 +500,13 @@ export class GanBleLab {
     let validationReason: string | null = null;
 
     if (this.detectedGen === "gen234") {
-      const result = tryDecryptGen234Packet(bytes, this.chosenMac);
+      const result = tryDecryptGen234Packet(bytes, this.chosenMac, this.cryptoProfile);
       if (result.status === "success") {
         decryptedHex = toHex(result.decryptedBytes);
         decryptStatus = "success";
         protocolValid = result.protocolValid ?? null;
         validationReason = result.validationReason ?? null;
+        this.cryptoDebug = result.cryptoDebug ?? this.cryptoDebug;
         const cls = classifyGen4Event(result.decryptedBytes[0] ?? 0);
         packetType = cls.packetType;
         meaning = cls.meaning;

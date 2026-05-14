@@ -27,7 +27,7 @@ Web Bluetooth is not supported in Firefox, Safari, or mobile browsers.
 ## Testing sequence
 
 1. Open the app.
-2. Enter your manual MAC address if available (optional — connection works without it).
+2. Enter your manual MAC address if available (optional to connect, required for GAN251 UI raw decrypt if advertisement MAC capture fails).
 3. Click **Connect**.
 4. If normal connect fails (device not found), click **Connect fallback / all devices** to scan with `acceptAllDevices`.
 5. Wait for the log to fill in with services, characteristics, and any initial reads.
@@ -48,14 +48,14 @@ Web Bluetooth is not supported in Firefox, Safari, or mobile browsers.
 - Logs characteristic properties (read/write/notify/indicate).
 - Reads initial values from readable characteristics.
 - Starts notifications on all notifiable/indicatable characteristics.
-- Logs every notification with: raw hex, byte length, changed bytes vs previous, expected move label, MAC info, and decrypt status.
+- Logs every notification with: raw hex, byte length, MAC info, derived crypto material, decrypt status, and protocol sanity notes.
+- Decrypts GAN251 UI raw notifications whose Bluetooth name starts with `gan251ui_` or `ganic251_` using the V3-2 AES/CBC profile, reversed-MAC salt, overlapping 16-byte block handling, and trailing-zero trimming.
 - Logs can be exported as JSON for offline analysis.
 
 ---
 
 ## What this version does NOT do
 
-- Does not decrypt GAN AES packets (placeholder hook exists for future implementation).
 - Does not decode moves or facelets.
 - Does not assume GAN 251 UI has the same packet structure as GAN 12 UI.
 - Does not require a manual MAC to connect.
@@ -64,7 +64,7 @@ Web Bluetooth is not supported in Firefox, Safari, or mobile browsers.
 
 ## Manual MAC note
 
-Manual MAC is optional and only used for future decryption key derivation tests.  
+Manual MAC is optional for connection but required for raw GAN251 UI decryption when the browser cannot capture the MAC from advertisement data.  
 Web Bluetooth on most platforms does **not** expose the real hardware MAC address — `device.id` is a browser-specific opaque identifier.  
 The MAC you enter stays in memory only and appears in exported local logs. It is never sent anywhere.
 
