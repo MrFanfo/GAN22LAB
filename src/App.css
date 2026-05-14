@@ -123,10 +123,16 @@ body {
   min-height: 360px;
   border-radius: 12px;
   overflow: hidden;
+  cursor: grab;
+  touch-action: none;
   background:
     radial-gradient(circle at 50% 35%, rgba(148,163,184,0.14), transparent 36%),
     rgba(2,6,23,0.55);
   border: 1px solid rgba(255,255,255,0.08);
+}
+
+.twisty-gyro-host.is-dragging {
+  cursor: grabbing;
 }
 
 .twisty-gyro-player {

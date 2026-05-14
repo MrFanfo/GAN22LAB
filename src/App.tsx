@@ -1,8 +1,14 @@
-import { useCallback, useMemo, useRef, useState, type MutableRefObject } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
 import type { Quaternion } from "three";
 import { GanBleLab } from "./gan/ganBle";
 import { normalizeMac } from "./gan/mac";
 import type { BleLogEntry, ConnectionMode, ConnectionStatus, PacketRow } from "./gan/types";
+import { gan251BytesToHex } from "./gan251/gan251Crypto";
+import { Gan251Session, summarizeGan251Packet } from "./gan251/gan251Session";
+import {
+  createSyntheticGan251MovePacket,
+  type SyntheticGan251Move,
+} from "./gan251/syntheticGan251Input";
 import { useSmartcubeConnection } from "./hooks/useSmartcubeConnection";
 import { OrientationCalibrationPanel } from "./components/OrientationCalibrationPanel";
 import { VirtualCube2x2 } from "./components/VirtualCube2x2";
@@ -117,6 +123,10 @@ export default function App() {
   const [showLog, setShowLog] = useState(false);
 
   const rawLabRef = useRef<GanBleLab | null>(null);
+  const syntheticSessionRef = useRef(new Gan251Session({ mac: "E4:66:E5:04:FA:06" }));
+  const syntheticStepRef = useRef(0);
+  const syntheticPacketCounterRef = useRef(900000);
+  const syntheticStartAtRef = useRef(Date.now());
   const rowBufferRef = useRef<PacketRow[]>([]);
   const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -132,7 +142,7 @@ export default function App() {
         const buf = rowBufferRef.current.splice(0);
         if (buf.length === 0) return;
         setPacketRows((prev) => {
-          const next = [...buf, ...prev];
+          const next = [...buf.slice().reverse(), ...prev];
           return next.length > MAX_ROWS ? next.slice(0, MAX_ROWS) : next;
         });
       }, 150);
@@ -182,8 +192,73 @@ export default function App() {
 
   const handleClear = useCallback(() => {
     rowBufferRef.current = [];
+    syntheticSessionRef.current.reset();
+    syntheticStepRef.current = 0;
+    syntheticStartAtRef.current = Date.now();
     setPacketRows([]);
   }, []);
+
+  const injectSyntheticMove = useCallback((move: SyntheticGan251Move) => {
+    const cubeTimestamp = Date.now() - syntheticStartAtRef.current;
+    const step = ++syntheticStepRef.current;
+    const packet = createSyntheticGan251MovePacket(move, step, cubeTimestamp);
+    const packetHex = gan251BytesToHex(packet);
+    const decoded = syntheticSessionRef.current.processDecryptedPacket(packet, packetHex);
+    const decodedSummary = summarizeGan251Packet(decoded);
+
+    addPacketRow({
+      id: crypto.randomUUID(),
+      packetNum: ++syntheticPacketCounterRef.current,
+      at: Date.now(),
+      mode,
+      packetType: "MOVE",
+      characteristicUuid: "keyboard://gan251-ui/synthetic-fff6",
+      rawHex: packetHex,
+      rawByteLength: packet.length,
+      decryptedHex: decoded.decryptedHex,
+      decryptStatus: "plain",
+      meaning: `keyboard synthetic ${decodedSummary}`,
+      transform: decoded.kind === "move" ? decoded.notation ?? decoded.notationGuess : move,
+      cubeTimestamp: decoded.kind === "move" ? decoded.cubeTimestamp : cubeTimestamp,
+      deviceName: "Keyboard GAN251 emulator",
+      protocolName: "GAN Gen4 / GAN251 UI V3-2 (keyboard synthetic)",
+      isTelemetry: false,
+      saltHex: null,
+      finalKeyHex: null,
+      finalIvHex: null,
+      protocolValid: decoded.crcValid,
+      validationReason: decoded.validationReason,
+      decodedKind: decoded.kind,
+      decodedSummary,
+      facelets24: decoded.virtualCubeFacelets24 ?? null,
+      moveDrivenFacelets24: decoded.moveDrivenFacelets24 ?? null,
+      stateDrivenFacelets24: decoded.stateDrivenFacelets24 ?? null,
+    });
+    addLog(`[keyboard] injected GAN251 MOVE ${move} as byte 0x${packet[8]!.toString(16).padStart(2, "0")}`);
+  }, [addLog, addPacketRow, mode]);
+
+  useEffect(() => {
+    const isTypingTarget = (target: EventTarget | null) => {
+      if (!(target instanceof HTMLElement)) return false;
+      const tag = target.tagName.toLowerCase();
+      return tag === "input" || tag === "textarea" || tag === "select" || target.isContentEditable;
+    };
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.repeat || event.altKey || event.ctrlKey || event.metaKey || isTypingTarget(event.target)) return;
+      const face =
+        event.code === "KeyU" ? "U"
+          : event.code === "KeyR" ? "R"
+            : event.code === "KeyF" ? "F"
+              : null;
+      if (!face) return;
+      event.preventDefault();
+      injectSyntheticMove(`${face}${event.shiftKey ? "'" : ""}` as SyntheticGan251Move);
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [injectSyntheticMove]);
 
   const visibleRows = useMemo(
     () =>

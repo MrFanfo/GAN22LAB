@@ -118,6 +118,8 @@ export function VirtualCube2x2({
   const stickerBindingsRef = useRef<StickerBinding[]>([]);
   const frameRef = useRef<number | null>(null);
   const fallbackRef = useRef(HOME_ORIENTATION.clone());
+  const manualQuaternionRef = useRef(new THREE.Quaternion());
+  const dragRef = useRef<{ pointerId: number; x: number; y: number } | null>(null);
   const initialFaceletsRef = useRef(facelets24);
 
   useEffect(() => {
@@ -163,10 +165,52 @@ export function VirtualCube2x2({
     const resizeObserver = new ResizeObserver(resize);
     resizeObserver.observe(host);
 
+    const applyDrag = (dx: number, dy: number) => {
+      const yaw = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), dx * 0.008);
+      const pitch = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), dy * 0.008);
+      manualQuaternionRef.current
+        .premultiply(yaw)
+        .premultiply(pitch)
+        .normalize();
+    };
+
+    const onPointerDown = (event: PointerEvent) => {
+      host.setPointerCapture(event.pointerId);
+      dragRef.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY };
+      host.classList.add("is-dragging");
+    };
+
+    const onPointerMove = (event: PointerEvent) => {
+      const drag = dragRef.current;
+      if (!drag || drag.pointerId !== event.pointerId) return;
+      event.preventDefault();
+      applyDrag(event.clientX - drag.x, event.clientY - drag.y);
+      dragRef.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY };
+    };
+
+    const onPointerEnd = (event: PointerEvent) => {
+      const drag = dragRef.current;
+      if (!drag || drag.pointerId !== event.pointerId) return;
+      dragRef.current = null;
+      host.classList.remove("is-dragging");
+      if (host.hasPointerCapture(event.pointerId)) host.releasePointerCapture(event.pointerId);
+    };
+
+    const onDoubleClick = () => {
+      manualQuaternionRef.current.identity();
+    };
+
+    host.addEventListener("pointerdown", onPointerDown);
+    host.addEventListener("pointermove", onPointerMove);
+    host.addEventListener("pointerup", onPointerEnd);
+    host.addEventListener("pointercancel", onPointerEnd);
+    host.addEventListener("dblclick", onDoubleClick);
+
     const tick = () => {
-      const target = gyroEnabled && targetQuaternionRef.current
+      const baseTarget = gyroEnabled && targetQuaternionRef.current
         ? targetQuaternionRef.current
         : fallbackRef.current;
+      const target = manualQuaternionRef.current.clone().multiply(baseTarget).normalize();
       cube.quaternion.slerp(target, 0.22);
       renderer.render(scene, camera);
       frameRef.current = requestAnimationFrame(tick);
@@ -175,6 +219,11 @@ export function VirtualCube2x2({
 
     return () => {
       resizeObserver.disconnect();
+      host.removeEventListener("pointerdown", onPointerDown);
+      host.removeEventListener("pointermove", onPointerMove);
+      host.removeEventListener("pointerup", onPointerEnd);
+      host.removeEventListener("pointercancel", onPointerEnd);
+      host.removeEventListener("dblclick", onDoubleClick);
       if (frameRef.current !== null) cancelAnimationFrame(frameRef.current);
       frameRef.current = null;
       scene.traverse((object) => {
