@@ -134,6 +134,7 @@ type Gen234CryptoProfile = {
   baseKey: readonly number[];
   baseIv: readonly number[];
   trimTrailingZeros: boolean;
+  validateCrc16: boolean;
 };
 
 const GEN234_CRYPTO_PROFILES: Record<Gen234CryptoProfileId, Gen234CryptoProfile> = {
@@ -143,6 +144,7 @@ const GEN234_CRYPTO_PROFILES: Record<Gen234CryptoProfileId, Gen234CryptoProfile>
     baseKey: GAN_GEN234_BASE_KEY,
     baseIv: GAN_GEN234_BASE_IV,
     trimTrailingZeros: false,
+    validateCrc16: false,
   },
   "gan251-ui-v3-2": {
     id: "gan251-ui-v3-2",
@@ -150,6 +152,7 @@ const GEN234_CRYPTO_PROFILES: Record<Gen234CryptoProfileId, Gen234CryptoProfile>
     baseKey: GAN251_UI_BASE_KEY,
     baseIv: GAN251_UI_BASE_IV,
     trimTrailingZeros: true,
+    validateCrc16: true,
   },
 };
 
@@ -215,6 +218,53 @@ function trimTrailingZeros(bytes: Uint8Array): Uint8Array {
   return end === bytes.length ? bytes : bytes.slice(0, end);
 }
 
+function crc16CcittFalse(bytes: Uint8Array): number {
+  let crc = 0xFFFF;
+  for (const byte of bytes) {
+    crc ^= byte << 8;
+    for (let i = 0; i < 8; i++) {
+      crc = (crc & 0x8000) !== 0 ? (crc << 1) ^ 0x1021 : crc << 1;
+      crc &= 0xFFFF;
+    }
+  }
+  return crc & 0xFFFF;
+}
+
+function formatWordHex(value: number): string {
+  return `0x${value.toString(16).padStart(4, "0")}`;
+}
+
+function validateGanCrc16(bytes: Uint8Array): { valid: boolean; reason: string } {
+  if (bytes.length < 3) {
+    return { valid: false, reason: "CRC16 unavailable: payload too short" };
+  }
+
+  const body = bytes.slice(0, -2);
+  const crcLo = bytes[bytes.length - 2]!;
+  const crcHi = bytes[bytes.length - 1]!;
+  const expectedLe = crcLo | (crcHi << 8);
+  const expectedBe = (crcLo << 8) | crcHi;
+  const computed = crc16CcittFalse(body);
+  const matchesLe = computed === expectedLe;
+  const matchesBe = computed === expectedBe;
+
+  if (matchesLe || matchesBe) {
+    return {
+      valid: true,
+      reason:
+        `CRC16 ok (${matchesLe ? "little" : "big"}-endian ` +
+        `${formatWordHex(computed)})`,
+    };
+  }
+
+  return {
+    valid: false,
+    reason:
+      `CRC16 failed: computed ${formatWordHex(computed)}, ` +
+      `packet le=${formatWordHex(expectedLe)} be=${formatWordHex(expectedBe)}`,
+  };
+}
+
 export type Gen234EventClassification = {
   packetType: "MOVE" | "FACELETS" | "GYRO" | "BATTERY" | "NOTIFY";
   meaning: string;
@@ -267,14 +317,20 @@ export function tryDecryptGen234Packet(
     }
     decryptChunk(result, 0, key, iv);
     const processed = profile.trimTrailingZeros ? trimTrailingZeros(result) : result;
-    const { valid, reason } = validateGen4Packet(processed);
+    const sanity = validateGen4Packet(processed);
+    const crc = profile.validateCrc16 ? validateGanCrc16(processed) : null;
     const trimNote = processed.length === result.length ? "" : `; trimmed ${result.length - processed.length} trailing zero byte(s)`;
+    const validationParts = [
+      `${profile.label}: ${crc ? crc.reason : sanity.reason}`,
+      crc ? `first-byte sanity: ${sanity.reason}` : null,
+      trimNote ? trimNote.slice(2) : null,
+    ].filter(Boolean);
     return {
       status: "success",
       decryptedBytes: processed,
       cryptoDebug,
-      protocolValid: valid,
-      validationReason: `${profile.label}: ${reason}${trimNote}`,
+      protocolValid: crc ? crc.valid : sanity.valid,
+      validationReason: validationParts.join("; "),
     };
   } catch (e) {
     return { status: "failed", message: e instanceof Error ? e.message : "AES decrypt error", cryptoDebug };

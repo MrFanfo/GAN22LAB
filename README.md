@@ -49,7 +49,7 @@ Web Bluetooth is not supported in Firefox, Safari, or mobile browsers.
 - Reads initial values from readable characteristics.
 - Starts notifications on all notifiable/indicatable characteristics.
 - Logs every notification with: raw hex, byte length, MAC info, derived crypto material, decrypt status, and protocol sanity notes.
-- Decrypts GAN251 UI raw notifications whose Bluetooth name starts with `gan251ui_` or `ganic251_` using the V3-2 AES/CBC profile, reversed-MAC salt, overlapping 16-byte block handling, and trailing-zero trimming.
+- Decrypts GAN251 UI raw notifications whose Bluetooth name starts with `gan251ui_` or `ganic251_` using the V3-2 AES/CBC profile, reversed-MAC salt, overlapping 16-byte block handling, trailing-zero trimming, and CRC16 validation.
 - Logs can be exported as JSON for offline analysis.
 
 ---
