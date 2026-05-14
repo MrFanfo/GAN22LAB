@@ -50,6 +50,8 @@ Web Bluetooth is not supported in Firefox, Safari, or mobile browsers.
 - Starts notifications on all notifiable/indicatable characteristics.
 - Logs every notification with: raw hex, byte length, MAC info, derived crypto material, decrypt status, and protocol sanity notes.
 - Decrypts GAN251 UI raw notifications whose Bluetooth name starts with `gan251ui_` or `ganic251_` using the V3-2 AES/CBC profile, reversed-MAC salt, overlapping 16-byte block handling, trailing-zero trimming, and CRC16 validation.
+- Decodes GAN251 UI move packets (`0x01`) into face/notation guesses and cube-state packets (`0xED`) into corner state plus a 24-sticker 2x2 facelet string.
+- Maintains a reusable virtual 2x2 cube model that updates from move packets and resyncs from full state packets.
 - Logs can be exported as JSON for offline analysis.
 
 ---
@@ -67,6 +69,35 @@ Web Bluetooth is not supported in Firefox, Safari, or mobile browsers.
 Manual MAC is optional for connection but required for raw GAN251 UI decryption when the browser cannot capture the MAC from advertisement data.  
 Web Bluetooth on most platforms does **not** expose the real hardware MAC address — `device.id` is a browser-specific opaque identifier.  
 The MAC you enter stays in memory only and appears in exported local logs. It is never sent anywhere.
+
+---
+
+## GAN251 module layout
+
+The Raw BLE GAN251 UI path is implemented as reusable modules under `src/gan251/`:
+
+- `gan251Crypto.ts` — V3-2 key/IV derivation, reversed-MAC salt, app-style overlapping AES/CBC decrypt, trimming helpers, CRC16.
+- `gan251PacketDecoder.ts` — packet type dispatch, move-byte decode, state/cubie decode, generic packet preservation.
+- `virtual2x2Cube.ts` — corner permutation/orientation model, move application, 24-facelet conversion.
+- `gan251Session.ts` — decrypts incoming notify packets, updates the virtual cube, emits structured decoded packets.
+- `gan251Examples.ts` — small known-packet self-test and example usage helpers.
+
+Example:
+
+```ts
+import { Gan251Session } from "./gan251";
+
+const session = new Gan251Session({ mac: "E4:66:E5:04:FA:06", debug: true });
+
+for (const encryptedNotifyPacket of packetsFromFff6) {
+  const decoded = session.processEncryptedNotify(encryptedNotifyPacket);
+  console.log(decoded.kind, decoded.validationReason);
+  console.log(session.getFacelets24());
+}
+```
+
+The 2x2 facelet output uses face order `U,R,F,D,L,B`, four stickers per face:
+`UUUURRRRFFFFDDDDLLLLBBBB` for solved state.
 
 ---
 
