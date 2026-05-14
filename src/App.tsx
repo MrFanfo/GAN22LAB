@@ -163,7 +163,8 @@ export default function App() {
 
   const [packetRows, setPacketRows] = useState<PacketRow[]>([]);
   const [showTelemetry, setShowTelemetry] = useState(false);
-  const [cubeDriveMode, setCubeDriveMode] = useState<CubeDriveMode>("state");
+  const [hideFaceletPackets, setHideFaceletPackets] = useState(true);
+  const [cubeDriveMode, setCubeDriveMode] = useState<CubeDriveMode>("moves");
   const [logLines, setLogLines] = useState<string[]>([]);
   const [showLog, setShowLog] = useState(false);
 
@@ -238,16 +239,21 @@ export default function App() {
   }, []);
 
   const visibleRows = useMemo(
-    () => (showTelemetry ? packetRows : packetRows.filter((r) => !r.isTelemetry)),
-    [packetRows, showTelemetry]
+    () =>
+      packetRows.filter((row) => {
+        if (!showTelemetry && row.isTelemetry) return false;
+        if (hideFaceletPackets && row.packetType === "FACELETS") return false;
+        return true;
+      }),
+    [packetRows, showTelemetry, hideFaceletPackets]
   );
 
   const handleExport = useCallback(() => {
     downloadJson(
       `gan251-lab-${new Date().toISOString().replace(/[:.]/g, "-")}.json`,
-      { exportedAt: new Date().toISOString(), mode, showTelemetry, rows: visibleRows }
+      { exportedAt: new Date().toISOString(), mode, showTelemetry, hideFaceletPackets, rows: visibleRows }
     );
-  }, [mode, showTelemetry, visibleRows]);
+  }, [mode, showTelemetry, hideFaceletPackets, visibleRows]);
 
   const deltaMs = useMemo(
     () =>
@@ -414,6 +420,13 @@ export default function App() {
               title="GYRO and BATTERY rows hidden by default"
             >
               {showTelemetry ? "Hide Telemetry" : "Show Telemetry"}
+            </button>
+            <button
+              className={`lab-btn${!hideFaceletPackets ? " active" : ""}`}
+              onClick={() => setHideFaceletPackets((v) => !v)}
+              title="Full-state FACELETS rows are hidden by default because they repeat often"
+            >
+              {hideFaceletPackets ? "Show Facelets" : "Hide Facelets"}
             </button>
             <button className="lab-btn" onClick={handleExport} disabled={packetRows.length === 0}>
               Export JSON
