@@ -27,11 +27,11 @@ type StickerRef = { face: Gan251Face; index: number };
 // URF,UFL,ULB,UBR,DFR,DLF,DBL,DRB. Orientation handling below assumes orientation 0
 // means these stickers are in solved order; orientation 1/2 cycles the cubie stickers.
 const CORNER_STICKERS: Record<number, [StickerRef, StickerRef, StickerRef]> = {
-  0: [{ face: "U", index: 3 }, { face: "R", index: 2 }, { face: "F", index: 1 }],
+  0: [{ face: "U", index: 3 }, { face: "R", index: 0 }, { face: "F", index: 1 }],
   1: [{ face: "U", index: 2 }, { face: "F", index: 0 }, { face: "L", index: 1 }],
   2: [{ face: "U", index: 0 }, { face: "L", index: 0 }, { face: "B", index: 1 }],
   3: [{ face: "U", index: 1 }, { face: "B", index: 0 }, { face: "R", index: 1 }],
-  4: [{ face: "D", index: 1 }, { face: "F", index: 3 }, { face: "R", index: 0 }],
+  4: [{ face: "D", index: 1 }, { face: "F", index: 3 }, { face: "R", index: 2 }],
   5: [{ face: "D", index: 0 }, { face: "L", index: 3 }, { face: "F", index: 2 }],
   6: [{ face: "D", index: 2 }, { face: "B", index: 3 }, { face: "L", index: 2 }],
   7: [{ face: "D", index: 3 }, { face: "R", index: 3 }, { face: "B", index: 2 }],
