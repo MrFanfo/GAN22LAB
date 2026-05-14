@@ -1,8 +1,12 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState, type MutableRefObject } from "react";
+import type { Quaternion } from "three";
 import { GanBleLab } from "./gan/ganBle";
-import { LibraryConnector } from "./gan/libraryConnector";
 import { normalizeMac } from "./gan/mac";
 import type { BleLogEntry, ConnectionMode, ConnectionStatus, PacketRow } from "./gan/types";
+import { useSmartcubeConnection } from "./hooks/useSmartcubeConnection";
+import { OrientationCalibrationPanel } from "./components/OrientationCalibrationPanel";
+import { VirtualCube2x2 } from "./components/VirtualCube2x2";
+import { SOLVED_2X2_FACELETS } from "./lib/cubeState2x2";
 
 // ── Formatting helpers ──────────────────────────────────────────────────────
 
@@ -37,42 +41,23 @@ function downloadJson(filename: string, payload: unknown) {
 }
 
 const MAX_ROWS = 2000;
-const SOLVED_2X2_FACELETS = "UUUURRRRFFFFDDDDLLLLBBBB";
-const FACE_ORDER = ["U", "R", "F", "D", "L", "B"] as const;
 type CubeDriveMode = "state" | "moves";
-const FACE_COLOR_CLASS: Record<(typeof FACE_ORDER)[number], string> = {
-  U: "face-u",
-  R: "face-r",
-  F: "face-f",
-  D: "face-d",
-  L: "face-l",
-  B: "face-b",
-};
-
-function splitFacelets24(facelets24: string): Record<(typeof FACE_ORDER)[number], string[]> {
-  const padded = (facelets24 + SOLVED_2X2_FACELETS).slice(0, 24);
-  return {
-    U: padded.slice(0, 4).split(""),
-    R: padded.slice(4, 8).split(""),
-    F: padded.slice(8, 12).split(""),
-    D: padded.slice(12, 16).split(""),
-    L: padded.slice(16, 20).split(""),
-    B: padded.slice(20, 24).split(""),
-  };
-}
 
 function Virtual2x2Panel({
   facelets24,
   source,
   driveMode,
   onDriveModeChange,
+  gyroQuaternionRef,
+  moveAlg,
 }: {
   facelets24: string;
   source: PacketRow | null;
   driveMode: CubeDriveMode;
   onDriveModeChange: (mode: CubeDriveMode) => void;
+  gyroQuaternionRef: MutableRefObject<Quaternion | null>;
+  moveAlg: string;
 }) {
-  const faces = splitFacelets24(facelets24);
   return (
     <section className="lab-panel virtual-cube-panel">
       <div className="virtual-cube-head">
@@ -106,50 +91,13 @@ function Virtual2x2Panel({
           <span className="virtual-facelets mono">{facelets24}</span>
         </div>
       </div>
-      <Cube3D2x2 faces={faces} />
+      <VirtualCube2x2
+        targetQuaternionRef={gyroQuaternionRef}
+        gyroEnabled
+        facelets24={facelets24}
+        moveAlg={driveMode === "moves" ? moveAlg : ""}
+      />
     </section>
-  );
-}
-
-function Cube3D2x2({ faces }: { faces: Record<(typeof FACE_ORDER)[number], string[]> }) {
-  return (
-    <div className="cube3d-stage" aria-label="Virtual 3D 2x2 cube">
-      <div className="cube3d">
-        <Cube3DFace face="F" stickers={faces.F} className="cube3d-face-front" />
-        <Cube3DFace face="B" stickers={faces.B} className="cube3d-face-back" />
-        <Cube3DFace face="R" stickers={faces.R} className="cube3d-face-right" />
-        <Cube3DFace face="L" stickers={faces.L} className="cube3d-face-left" />
-        <Cube3DFace face="U" stickers={faces.U} className="cube3d-face-top" />
-        <Cube3DFace face="D" stickers={faces.D} className="cube3d-face-bottom" />
-      </div>
-    </div>
-  );
-}
-
-function Cube3DFace({
-  face,
-  stickers,
-  className,
-}: {
-  face: (typeof FACE_ORDER)[number];
-  stickers: string[];
-  className: string;
-}) {
-  return (
-    <div className={`cube3d-face ${className}`} data-face={face}>
-      {stickers.map((sticker, index) => {
-        const faceKey = FACE_ORDER.includes(sticker as (typeof FACE_ORDER)[number])
-          ? sticker as (typeof FACE_ORDER)[number]
-          : face;
-        return (
-          <span
-            key={`${face}-${index}`}
-            className={`cube3d-sticker ${FACE_COLOR_CLASS[faceKey]}`}
-            title={`${face}${index}: ${sticker}`}
-          />
-        );
-      })}
-    </div>
   );
 }
 
@@ -169,7 +117,6 @@ export default function App() {
   const [showLog, setShowLog] = useState(false);
 
   const rawLabRef = useRef<GanBleLab | null>(null);
-  const libConnRef = useRef<LibraryConnector | null>(null);
   const rowBufferRef = useRef<PacketRow[]>([]);
   const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -197,6 +144,13 @@ export default function App() {
     setLogLines((prev) => [`[${ts}] ${msg}`, ...prev].slice(0, 500));
   }, []);
 
+  const smartcube = useSmartcubeConnection({
+    manualMac: normalizedMac,
+    onPacketRow: addPacketRow,
+    onLog: addLog,
+    onStatusChange: setStatus,
+  });
+
   const handleConnect = useCallback(async (fallback = false) => {
     if (mode === "raw") {
       rawLabRef.current = new GanBleLab({
@@ -212,15 +166,9 @@ export default function App() {
         await rawLabRef.current.connectNormal();
       }
     } else {
-      libConnRef.current = new LibraryConnector({
-        manualMac: normalizedMac,
-        onPacketRow: addPacketRow,
-        onLog: addLog,
-        onStatusChange: setStatus,
-      });
-      await libConnRef.current.connect();
+      await smartcube.connect();
     }
-  }, [mode, normalizedMac, preferManualMac, addPacketRow, addLog]);
+  }, [mode, normalizedMac, preferManualMac, addPacketRow, addLog, smartcube]);
 
   const handleDisconnect = useCallback(async () => {
     if (mode === "raw") {
@@ -228,10 +176,9 @@ export default function App() {
       rawLabRef.current = null;
       setStatus("disconnected");
     } else {
-      await libConnRef.current?.disconnect();
-      libConnRef.current = null;
+      await smartcube.disconnect();
     }
-  }, [mode]);
+  }, [mode, smartcube]);
 
   const handleClear = useCallback(() => {
     rowBufferRef.current = [];
@@ -283,6 +230,16 @@ export default function App() {
     cubeDriveMode === "state"
       ? latestStateDrivenRow?.stateDrivenFacelets24 ?? SOLVED_2X2_FACELETS
       : latestMoveDrivenRow?.moveDrivenFacelets24 ?? SOLVED_2X2_FACELETS;
+  const moveAlg = useMemo(
+    () =>
+      packetRows
+        .filter((row) => row.packetType === "MOVE" && row.transform)
+        .slice()
+        .reverse()
+        .map((row) => row.transform)
+        .join(" "),
+    [packetRows]
+  );
 
   const isConnected = status === "connected";
   const isBusy = status === "requesting-device" || status === "connecting";
@@ -394,6 +351,14 @@ export default function App() {
         source={latestVirtualRow}
         driveMode={cubeDriveMode}
         onDriveModeChange={setCubeDriveMode}
+        gyroQuaternionRef={smartcube.cubeQuaternionRef}
+        moveAlg={moveAlg}
+      />
+
+      <OrientationCalibrationPanel
+        debug={smartcube.debug}
+        onResetGyro={smartcube.resetGyroBasis}
+        onCalibrate={smartcube.calibrateSemanticOrientation}
       />
 
       {/* Packet table */}

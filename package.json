@@ -9,12 +9,14 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@types/three": "^0.184.1",
     "aes-js": "^3.1.2",
     "lz-string": "^1.5.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "rxjs": "^7.8.2",
-    "smartcube-web-bluetooth": "github:MrFanfo/smartcube-web-bluetooth"
+    "smartcube-web-bluetooth": "github:MrFanfo/smartcube-web-bluetooth",
+    "three": "^0.184.0"
   },
   "devDependencies": {
     "@types/aes-js": "^3.1.4",
