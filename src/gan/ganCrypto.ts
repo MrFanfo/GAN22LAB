@@ -266,21 +266,36 @@ function validateGanCrc16(bytes: Uint8Array): { valid: boolean; reason: string }
 }
 
 export type Gen234EventClassification = {
-  packetType: "MOVE" | "FACELETS" | "GYRO" | "BATTERY" | "NOTIFY";
+  packetType: "MOVE" | "FACELETS" | "GYRO" | "BATTERY" | "HARDWARE" | "NOTIFY";
   meaning: string;
   isTelemetry: boolean;
 };
 
 export function classifyGen4Event(eventByte: number): Gen234EventClassification {
   switch (eventByte) {
-    case 0x01: return { packetType: "MOVE",     meaning: "Gen4 Move",         isTelemetry: false };
-    case 0xD1: return { packetType: "MOVE",     meaning: "Gen4 Move history", isTelemetry: false };
-    case 0xED: return { packetType: "FACELETS", meaning: "Gen4 Facelets",     isTelemetry: false };
-    case 0xEC: return { packetType: "GYRO",     meaning: "Gen4 Gyro",         isTelemetry: true  };
-    case 0xEF: return { packetType: "BATTERY",  meaning: "Gen4 Battery",      isTelemetry: true  };
+    case 0x01: return { packetType: "MOVE",     meaning: "GAN251 move event",              isTelemetry: false };
+    case 0x02: return { packetType: "NOTIFY",   meaning: "GAN251 time / solve event",      isTelemetry: false };
+    case 0xD1: return { packetType: "MOVE",     meaning: "GAN251 formula history",         isTelemetry: false };
+    case 0xD2: return { packetType: "NOTIFY",   meaning: "GAN251 result (32-bit)",         isTelemetry: false };
+    case 0xD3: return { packetType: "NOTIFY",   meaning: "GAN251 result (8-bit)",          isTelemetry: false };
+    case 0xD4: return { packetType: "NOTIFY",   meaning: "GAN251 result (8-bit)",          isTelemetry: false };
+    case 0xDC: return { packetType: "NOTIFY",   meaning: "GAN251 result (32-bit)",         isTelemetry: false };
+    case 0xEA: return { packetType: "NOTIFY",   meaning: "GAN251 type / event",            isTelemetry: false };
+    case 0xEC: return { packetType: "GYRO",     meaning: "GAN251 gyro / orientation",      isTelemetry: true  };
+    case 0xED: return { packetType: "FACELETS", meaning: "GAN251 cube state / status",     isTelemetry: false };
+    case 0xEE: return { packetType: "GYRO",     meaning: "GAN251 face-angle motion",       isTelemetry: true  };
+    case 0xEF: return { packetType: "BATTERY",  meaning: "GAN251 battery",                 isTelemetry: true  };
+    case 0xF0: return { packetType: "NOTIFY",   meaning: "GAN251 content / string",        isTelemetry: false };
+    case 0xF5: return { packetType: "HARDWARE", meaning: "GAN251 build time",              isTelemetry: false };
+    case 0xF6: return { packetType: "HARDWARE", meaning: "GAN251 restart reason",          isTelemetry: false };
+    case 0xFA: return { packetType: "HARDWARE", meaning: "GAN251 product date",            isTelemetry: false };
+    case 0xFC: return { packetType: "HARDWARE", meaning: "GAN251 model string",            isTelemetry: false };
+    case 0xFD: return { packetType: "HARDWARE", meaning: "GAN251 version",                 isTelemetry: false };
+    case 0xFE: return { packetType: "HARDWARE", meaning: "GAN251 device version",          isTelemetry: false };
+    case 0xFF: return { packetType: "HARDWARE", meaning: "GAN251 device MAC-like info",    isTelemetry: false };
     default:   return {
       packetType: "NOTIFY",
-      meaning: `Gen4 Unknown (0x${eventByte.toString(16).padStart(2, "0")})`,
+      meaning: `GAN251 unknown bleProtoId 0x${eventByte.toString(16).padStart(2, "0")}`,
       isTelemetry: false,
     };
   }
