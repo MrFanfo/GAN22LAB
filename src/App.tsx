@@ -39,6 +39,7 @@ function downloadJson(filename: string, payload: unknown) {
 const MAX_ROWS = 2000;
 const SOLVED_2X2_FACELETS = "UUUURRRRFFFFDDDDLLLLBBBB";
 const FACE_ORDER = ["U", "R", "F", "D", "L", "B"] as const;
+type CubeDriveMode = "state" | "moves";
 const FACE_COLOR_CLASS: Record<(typeof FACE_ORDER)[number], string> = {
   U: "face-u",
   R: "face-r",
@@ -63,64 +64,91 @@ function splitFacelets24(facelets24: string): Record<(typeof FACE_ORDER)[number]
 function Virtual2x2Panel({
   facelets24,
   source,
+  driveMode,
+  onDriveModeChange,
 }: {
   facelets24: string;
   source: PacketRow | null;
+  driveMode: CubeDriveMode;
+  onDriveModeChange: (mode: CubeDriveMode) => void;
 }) {
   const faces = splitFacelets24(facelets24);
   return (
     <section className="lab-panel virtual-cube-panel">
       <div className="virtual-cube-head">
         <div>
-          <h2>Virtual 2x2 State</h2>
+          <h2>Virtual 2x2 Cube</h2>
           <p>
             {source
-              ? `Updated by packet #${source.packetNum}: ${source.decodedSummary ?? source.meaning}`
-              : "Waiting for decoded GAN251 Raw BLE packets."}
+              ? `${driveMode === "state" ? "State packet" : "Move stream"} view updated by packet #${source.packetNum}: ${source.decodedSummary ?? source.meaning}`
+              : `Waiting for decoded GAN251 ${driveMode === "state" ? "state" : "move"} packets.`}
           </p>
         </div>
-        <span className="virtual-facelets mono">{facelets24}</span>
+        <div className="virtual-cube-controls">
+          <div className="virtual-drive-toggle" role="tablist" aria-label="Virtual cube driver">
+            <button
+              type="button"
+              className={driveMode === "state" ? "active" : ""}
+              onClick={() => onDriveModeChange("state")}
+              aria-pressed={driveMode === "state"}
+            >
+              Facelets/state
+            </button>
+            <button
+              type="button"
+              className={driveMode === "moves" ? "active" : ""}
+              onClick={() => onDriveModeChange("moves")}
+              aria-pressed={driveMode === "moves"}
+            >
+              Moves only
+            </button>
+          </div>
+          <span className="virtual-facelets mono">{facelets24}</span>
+        </div>
       </div>
-      <div className="cube-net-2x2" aria-label="Virtual 2x2 cube net">
-        <div className="net-spacer" />
-        <FaceBlock face="U" stickers={faces.U} />
-        <div className="net-spacer" />
-        <FaceBlock face="L" stickers={faces.L} />
-        <FaceBlock face="F" stickers={faces.F} />
-        <FaceBlock face="R" stickers={faces.R} />
-        <FaceBlock face="B" stickers={faces.B} />
-        <div className="net-spacer" />
-        <FaceBlock face="D" stickers={faces.D} />
-        <div className="net-spacer" />
-      </div>
+      <Cube3D2x2 faces={faces} />
     </section>
   );
 }
 
-function FaceBlock({
+function Cube3D2x2({ faces }: { faces: Record<(typeof FACE_ORDER)[number], string[]> }) {
+  return (
+    <div className="cube3d-stage" aria-label="Virtual 3D 2x2 cube">
+      <div className="cube3d">
+        <Cube3DFace face="F" stickers={faces.F} className="cube3d-face-front" />
+        <Cube3DFace face="B" stickers={faces.B} className="cube3d-face-back" />
+        <Cube3DFace face="R" stickers={faces.R} className="cube3d-face-right" />
+        <Cube3DFace face="L" stickers={faces.L} className="cube3d-face-left" />
+        <Cube3DFace face="U" stickers={faces.U} className="cube3d-face-top" />
+        <Cube3DFace face="D" stickers={faces.D} className="cube3d-face-bottom" />
+      </div>
+    </div>
+  );
+}
+
+function Cube3DFace({
   face,
   stickers,
+  className,
 }: {
   face: (typeof FACE_ORDER)[number];
   stickers: string[];
+  className: string;
 }) {
   return (
-    <div className="cube-face-2x2" data-face={face}>
-      <span className="cube-face-label">{face}</span>
-      <div className="cube-face-stickers">
-        {stickers.map((sticker, index) => {
-          const faceKey = FACE_ORDER.includes(sticker as (typeof FACE_ORDER)[number])
-            ? sticker as (typeof FACE_ORDER)[number]
-            : face;
-          return (
-            <span
-              key={`${face}-${index}`}
-              className={`cube-sticker ${FACE_COLOR_CLASS[faceKey]}`}
-              title={`${face}${index}: ${sticker}`}
-            />
-          );
-        })}
-      </div>
+    <div className={`cube3d-face ${className}`} data-face={face}>
+      {stickers.map((sticker, index) => {
+        const faceKey = FACE_ORDER.includes(sticker as (typeof FACE_ORDER)[number])
+          ? sticker as (typeof FACE_ORDER)[number]
+          : face;
+        return (
+          <span
+            key={`${face}-${index}`}
+            className={`cube3d-sticker ${FACE_COLOR_CLASS[faceKey]}`}
+            title={`${face}${index}: ${sticker}`}
+          />
+        );
+      })}
     </div>
   );
 }
@@ -135,6 +163,7 @@ export default function App() {
 
   const [packetRows, setPacketRows] = useState<PacketRow[]>([]);
   const [showTelemetry, setShowTelemetry] = useState(false);
+  const [cubeDriveMode, setCubeDriveMode] = useState<CubeDriveMode>("state");
   const [logLines, setLogLines] = useState<string[]>([]);
   const [showLog, setShowLog] = useState(false);
 
@@ -235,11 +264,19 @@ export default function App() {
     return c;
   }, [packetRows]);
 
-  const latestVirtualRow = useMemo(
-    () => packetRows.find((row) => row.facelets24) ?? null,
+  const latestStateDrivenRow = useMemo(
+    () => packetRows.find((row) => row.decodedKind === "state" && row.stateDrivenFacelets24) ?? null,
     [packetRows]
   );
-  const latestFacelets24 = latestVirtualRow?.facelets24 ?? SOLVED_2X2_FACELETS;
+  const latestMoveDrivenRow = useMemo(
+    () => packetRows.find((row) => row.decodedKind === "move" && row.moveDrivenFacelets24) ?? null,
+    [packetRows]
+  );
+  const latestVirtualRow = cubeDriveMode === "state" ? latestStateDrivenRow : latestMoveDrivenRow;
+  const latestFacelets24 =
+    cubeDriveMode === "state"
+      ? latestStateDrivenRow?.stateDrivenFacelets24 ?? SOLVED_2X2_FACELETS
+      : latestMoveDrivenRow?.moveDrivenFacelets24 ?? SOLVED_2X2_FACELETS;
 
   const isConnected = status === "connected";
   const isBusy = status === "requesting-device" || status === "connecting";
@@ -346,7 +383,12 @@ export default function App() {
         </div>
       </section>
 
-      <Virtual2x2Panel facelets24={latestFacelets24} source={latestVirtualRow} />
+      <Virtual2x2Panel
+        facelets24={latestFacelets24}
+        source={latestVirtualRow}
+        driveMode={cubeDriveMode}
+        onDriveModeChange={setCubeDriveMode}
+      />
 
       {/* Packet table */}
       <section className="lab-panel">

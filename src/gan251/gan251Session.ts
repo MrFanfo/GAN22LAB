@@ -29,6 +29,8 @@ export class Gan251Session {
   private readonly debug: boolean;
   private readonly onDebug?: (entry: Gan251SessionDebugEntry) => void;
   private readonly cube = Virtual2x2Cube.solved();
+  private readonly moveDrivenCube = Virtual2x2Cube.solved();
+  private readonly stateDrivenCube = Virtual2x2Cube.solved();
 
   constructor(options: Gan251SessionOptions) {
     this.mac = options.mac;
@@ -41,6 +43,8 @@ export class Gan251Session {
 
   reset(): void {
     this.cube.reset();
+    this.moveDrivenCube.reset();
+    this.stateDrivenCube.reset();
   }
 
   cloneCube(): Virtual2x2Cube {
@@ -49,6 +53,14 @@ export class Gan251Session {
 
   getFacelets24(): string {
     return this.cube.toFacelets24();
+  }
+
+  getMoveDrivenFacelets24(): string {
+    return this.moveDrivenCube.toFacelets24();
+  }
+
+  getStateDrivenFacelets24(): string {
+    return this.stateDrivenCube.toFacelets24();
   }
 
   getCornerPermutation(): number[] {
@@ -67,7 +79,7 @@ export class Gan251Session {
       decoded.cryptoDebug = cryptoDebug;
       decoded.rawBytes = Array.from(rawPacket);
       this.applyDecodedPacket(decoded);
-      decoded.virtualCubeFacelets24 = this.getFacelets24();
+      this.attachFaceletViews(decoded);
       this.emitDebug(decoded, rawHex);
       return decoded;
     } catch (error) {
@@ -82,8 +94,8 @@ export class Gan251Session {
         rawBytes: Array.from(rawPacket),
         decryptedBytes: null,
         error: message,
-        virtualCubeFacelets24: this.getFacelets24(),
       };
+      this.attachFaceletViews(decoded);
       this.emitDebug(decoded, rawHex);
       return decoded;
     }
@@ -92,7 +104,7 @@ export class Gan251Session {
   processDecryptedPacket(decryptedPacket: Uint8Array, rawHex = ""): Gan251DecodedPacket {
     const decoded = this.decodeWithCarefulTrim(decryptedPacket, rawHex);
     this.applyDecodedPacket(decoded);
-    decoded.virtualCubeFacelets24 = this.getFacelets24();
+    this.attachFaceletViews(decoded);
     this.emitDebug(decoded, rawHex);
     return decoded;
   }
@@ -136,11 +148,19 @@ export class Gan251Session {
   private applyState(decoded: Gan251StatePacket): void {
     if (decoded.crcValid === false) return;
     this.cube.loadCorners(decoded.cornerPermutation, decoded.cornerOrientation);
+    this.stateDrivenCube.loadCorners(decoded.cornerPermutation, decoded.cornerOrientation);
   }
 
   private applyMove(decoded: Gan251MovePacket): void {
     if (decoded.crcValid === false || !decoded.face || decoded.direction === "unknown") return;
     this.cube.applyMove(decoded.face, decoded.direction);
+    this.moveDrivenCube.applyMove(decoded.face, decoded.direction);
+  }
+
+  private attachFaceletViews(decoded: Gan251DecodedPacket): void {
+    decoded.virtualCubeFacelets24 = this.getFacelets24();
+    decoded.moveDrivenFacelets24 = this.getMoveDrivenFacelets24();
+    decoded.stateDrivenFacelets24 = this.getStateDrivenFacelets24();
   }
 
   private emitDebug(decoded: Gan251DecodedPacket, rawHex: string): void {

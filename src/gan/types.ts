@@ -46,6 +46,8 @@ export type PacketRow = {
   decodedKind?: string | null;
   decodedSummary?: string | null;
   facelets24?: string | null;
+  moveDrivenFacelets24?: string | null;
+  stateDrivenFacelets24?: string | null;
 };
 
 // Legacy log entry kept for the diagnostic log panel

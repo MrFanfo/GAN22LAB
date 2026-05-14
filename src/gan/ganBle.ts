@@ -550,6 +550,8 @@ export class GanBleLab {
             decodedKind: null,
             decodedSummary: null,
             facelets24: null,
+            moveDrivenFacelets24: null,
+            stateDrivenFacelets24: null,
           };
           this.options.onPacketRow(row);
           return;
@@ -663,6 +665,8 @@ export class GanBleLab {
       decodedKind: decoded.kind,
       decodedSummary,
       facelets24: decoded.virtualCubeFacelets24 ?? null,
+      moveDrivenFacelets24: decoded.moveDrivenFacelets24 ?? null,
+      stateDrivenFacelets24: decoded.stateDrivenFacelets24 ?? null,
     };
   }
 }

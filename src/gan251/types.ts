@@ -43,6 +43,8 @@ export type Gan251DecodeBase = {
   decryptedBytes: number[] | null;
   cryptoDebug?: Gan251CryptoDebug;
   virtualCubeFacelets24?: string;
+  moveDrivenFacelets24?: string;
+  stateDrivenFacelets24?: string;
 };
 
 export type Gan251MoveByteDecode = {
