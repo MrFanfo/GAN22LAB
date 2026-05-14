@@ -309,6 +309,7 @@ export default function App() {
                   <th className="col-dec">Decrypted (hex)</th>
                   <th className="col-meaning">Meaning</th>
                   <th className="col-transform">Transform</th>
+                  <th className="col-facelets">2x2 Facelets</th>
                   <th className="col-proto">Protocol</th>
                   <th className="col-valid">Valid?</th>
                   <th className="col-reason">Validation</th>
@@ -368,6 +369,9 @@ export default function App() {
                         {row.transform ? (
                           <span className="transform-move">{row.transform}</span>
                         ) : <span className="dim-dash">—</span>}
+                      </td>
+                      <td className="col-facelets mono" title={row.facelets24 ?? undefined}>
+                        {row.facelets24 ?? "—"}
                       </td>
                       <td className="col-proto">
                         {row.protocolName ?? "—"}

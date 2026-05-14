@@ -18,6 +18,8 @@ import {
 } from "./ganCrypto";
 import type { Gen1DeviceInfo, Gen234CryptoDebug, Gen234CryptoProfileId } from "./ganCrypto";
 import type { BleLogEntry, ConnectionStatus, GanBleLabOptions, PacketRow } from "./types";
+import { Gan251Session, summarizeGan251Packet } from "../gan251/gan251Session";
+import type { Gan251DecodedPacket } from "../gan251/types";
 
 // Known characteristic UUID → label / packet type
 const CHAR_META: Record<string, { label: string; packetType: PacketRow["packetType"]; isTelemetry: boolean }> = {
@@ -57,6 +59,7 @@ export class GanBleLab {
   private detectedGenLabel: string = "GAN (raw)";
   private detectedGen: "gen1" | "gen234" | null = null;
   private cryptoProfile: Gen234CryptoProfileId = "default-gen234";
+  private gan251Session: Gan251Session | null = null;
   private chosenMac: string | null = null;
   private cryptoDebug: Gen234CryptoDebug | null = null;
   private advManufacturerDataHex: string | null = null;
@@ -104,6 +107,7 @@ export class GanBleLab {
     this.detectedGenLabel = "GAN (raw)";
     this.detectedGen = null;
     this.cryptoProfile = "default-gen234";
+    this.gan251Session = null;
     this.chosenMac = null;
     this.cryptoDebug = null;
     this.advManufacturerDataHex = null;
@@ -195,6 +199,7 @@ export class GanBleLab {
     this.setStatus("requesting-device");
     this.gen1DeviceInfo = { firmwareRevision: null, systemId: null };
     this.deviceName = null;
+    this.gan251Session = null;
 
     let device: BluetoothDevice;
     try {
@@ -394,6 +399,24 @@ export class GanBleLab {
 
     if (this.detectedGen === "gen234" && this.chosenMac) {
       this.cryptoDebug = deriveGen234CryptoDebug(this.chosenMac, this.cryptoProfile) ?? null;
+      if (this.cryptoProfile === "gan251-ui-v3-2") {
+        try {
+          this.gan251Session = new Gan251Session({
+            mac: this.chosenMac,
+            debug: true,
+            onDebug: (entry) => {
+              this.options.onLog({
+                type: "debug",
+                message: `GAN251 decoded ${entry.decodedKind}: ${entry.decodedSummary}`,
+                data: entry,
+              });
+            },
+          });
+        } catch (error) {
+          const msg = error instanceof Error ? error.message : String(error);
+          this.options.onLog({ type: "error", message: `GAN251 session init failed: ${msg}` });
+        }
+      }
     }
 
     this.options.onLog({
@@ -500,6 +523,42 @@ export class GanBleLab {
     let validationReason: string | null = null;
 
     if (this.detectedGen === "gen234") {
+      if (this.cryptoProfile === "gan251-ui-v3-2") {
+        if (!this.gan251Session) {
+          const row: PacketRow = {
+            id: crypto.randomUUID(),
+            packetNum: ++this.rowCounter,
+            at: Date.now(),
+            mode: "raw",
+            packetType,
+            characteristicUuid: uuid,
+            rawHex,
+            rawByteLength: bytes.length,
+            decryptedHex: null,
+            decryptStatus: "unavailable",
+            meaning: "GAN251 UI V3-2 packet (MAC/session required)",
+            transform: null,
+            cubeTimestamp: null,
+            deviceName: this.deviceName,
+            protocolName: this.detectedGenLabel,
+            isTelemetry,
+            saltHex: this.cryptoDebug?.saltHex ?? null,
+            finalKeyHex: this.cryptoDebug?.finalKeyHex ?? null,
+            finalIvHex: this.cryptoDebug?.finalIvHex ?? null,
+            protocolValid: null,
+            validationReason: "GAN251 session unavailable; check MAC",
+            decodedKind: null,
+            decodedSummary: null,
+            facelets24: null,
+          };
+          this.options.onPacketRow(row);
+          return;
+        }
+        const decoded = this.gan251Session.processEncryptedNotify(bytes);
+        this.options.onPacketRow(this.mapGan251DecodedToPacketRow(decoded, uuid, rawHex, bytes.length));
+        return;
+      }
+
       const result = tryDecryptGen234Packet(bytes, this.chosenMac, this.cryptoProfile);
       if (result.status === "success") {
         decryptedHex = toHex(result.decryptedBytes);
@@ -561,6 +620,50 @@ export class GanBleLab {
     };
 
     this.options.onPacketRow(row);
+  }
+
+  private mapGan251DecodedToPacketRow(
+    decoded: Gan251DecodedPacket,
+    uuid: string,
+    rawHex: string,
+    rawByteLength: number,
+  ): PacketRow {
+    const packetType: PacketRow["packetType"] =
+      decoded.kind === "move" ? "MOVE"
+        : decoded.kind === "state" ? "FACELETS"
+          : decoded.kind === "gyro" ? "GYRO"
+            : decoded.kind === "battery" ? "BATTERY"
+              : decoded.kind === "hardware" ? "HARDWARE"
+                : "NOTIFY";
+    const isTelemetry = decoded.kind === "gyro" || decoded.kind === "battery";
+    const decodedSummary = summarizeGan251Packet(decoded);
+
+    return {
+      id: crypto.randomUUID(),
+      packetNum: ++this.rowCounter,
+      at: Date.now(),
+      mode: "raw",
+      packetType,
+      characteristicUuid: uuid,
+      rawHex,
+      rawByteLength,
+      decryptedHex: decoded.decryptedHex,
+      decryptStatus: decoded.decryptedHex ? "success" : "failed",
+      meaning: decodedSummary,
+      transform: decoded.kind === "move" ? decoded.notation ?? decoded.notationGuess : null,
+      cubeTimestamp: decoded.kind === "move" ? decoded.cubeTimestamp : null,
+      deviceName: this.deviceName,
+      protocolName: this.detectedGenLabel,
+      isTelemetry,
+      saltHex: decoded.cryptoDebug?.saltHex ?? this.cryptoDebug?.saltHex ?? null,
+      finalKeyHex: decoded.cryptoDebug?.finalKeyHex ?? this.cryptoDebug?.finalKeyHex ?? null,
+      finalIvHex: decoded.cryptoDebug?.finalIvHex ?? this.cryptoDebug?.finalIvHex ?? null,
+      protocolValid: decoded.crcValid,
+      validationReason: decoded.validationReason,
+      decodedKind: decoded.kind,
+      decodedSummary,
+      facelets24: decoded.virtualCubeFacelets24 ?? null,
+    };
   }
 }
 

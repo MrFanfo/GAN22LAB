@@ -43,6 +43,9 @@ export type PacketRow = {
   finalIvHex: string | null;
   protocolValid: boolean | null;
   validationReason: string | null;
+  decodedKind?: string | null;
+  decodedSummary?: string | null;
+  facelets24?: string | null;
 };
 
 // Legacy log entry kept for the diagnostic log panel

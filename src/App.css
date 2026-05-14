@@ -340,6 +340,7 @@ button:disabled { opacity: 0.35; cursor: not-allowed; }
 .col-dec       { width: 200px; }
 .col-meaning   { width: 200px; }
 .col-transform { width: 68px;  white-space: nowrap; }
+.col-facelets  { width: 180px; }
 .col-proto     { width: 130px; white-space: nowrap; }
 .col-valid     { width: 46px;  white-space: nowrap; text-align: center; }
 .col-reason    { width: 180px; }
