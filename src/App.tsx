@@ -12,6 +12,8 @@ import {
 import { useSmartcubeConnection } from "./hooks/useSmartcubeConnection";
 import { OrientationCalibrationPanel } from "./components/OrientationCalibrationPanel";
 import { VirtualCube2x2 } from "./components/VirtualCube2x2";
+import { AlgMatcherPanel } from "./components/AlgMatcherPanel";
+import { parseGanAlg } from "./lib/gan251AlgMatcher";
 import { SOLVED_2X2_FACELETS } from "./lib/cubeState2x2";
 
 // ── Formatting helpers ──────────────────────────────────────────────────────
@@ -119,6 +121,7 @@ export default function App() {
   const [showTelemetry, setShowTelemetry] = useState(false);
   const [hideFaceletPackets, setHideFaceletPackets] = useState(true);
   const [cubeDriveMode, setCubeDriveMode] = useState<CubeDriveMode>("moves");
+  const [matcherSessionStart, setMatcherSessionStart] = useState(0);
   const [logLines, setLogLines] = useState<string[]>([]);
   const [showLog, setShowLog] = useState(false);
 
@@ -316,6 +319,20 @@ export default function App() {
     [packetRows]
   );
 
+  // Live GAN move stream for the alg matcher — moves since the last reset, oldest-first
+  const matcherGanMoves = useMemo(() => {
+    const transforms = packetRows
+      .filter(row => row.packetType === "MOVE" && row.transform && row.packetNum > matcherSessionStart)
+      .slice()
+      .reverse()
+      .map(row => row.transform!);
+    return parseGanAlg(transforms) ?? [];
+  }, [packetRows, matcherSessionStart]);
+
+  const handleMatcherReset = useCallback(() => {
+    setMatcherSessionStart(packetRows[0]?.packetNum ?? 0);
+  }, [packetRows]);
+
   const isConnected = status === "connected";
   const isBusy = status === "requesting-device" || status === "connecting";
 
@@ -435,6 +452,8 @@ export default function App() {
         onResetGyro={smartcube.resetGyroBasis}
         onCalibrate={smartcube.calibrateSemanticOrientation}
       />
+
+      <AlgMatcherPanel liveGanMoves={matcherGanMoves} onReset={handleMatcherReset} />
 
       {/* Packet table */}
       <section className="lab-panel">
