@@ -13,6 +13,7 @@ import { useSmartcubeConnection } from "./hooks/useSmartcubeConnection";
 import { OrientationCalibrationPanel } from "./components/OrientationCalibrationPanel";
 import { VirtualCube2x2 } from "./components/VirtualCube2x2";
 import { AlgMatcherPanel } from "./components/AlgMatcherPanel";
+import { AlgTrackerPanel } from "./components/AlgTrackerPanel";
 import { parseGanAlg } from "./lib/gan251AlgMatcher";
 import { SOLVED_2X2_FACELETS } from "./lib/cubeState2x2";
 
@@ -112,6 +113,7 @@ function Virtual2x2Panel({
 // ── Component ───────────────────────────────────────────────────────────────
 
 export default function App() {
+  const [view, setView] = useState<"tracker" | "lab">("tracker");
   const [mode, setMode] = useState<ConnectionMode>("library");
   const [status, setStatus] = useState<ConnectionStatus>("disconnected");
   const [manualMacInput, setManualMacInput] = useState("");
@@ -354,6 +356,23 @@ export default function App() {
         <p className="lab-subtitle">Raw BLE packet inspector + library mode with full decryption</p>
       </header>
 
+      <nav className="lab-view-nav" style={{ display: "flex", gap: 8, marginBottom: 4 }}>
+        <button
+          className={`mode-btn${view === "tracker" ? " active" : ""}`}
+          onClick={() => setView("tracker")}
+          style={{ flex: "0 0 auto", padding: "8px 16px" }}
+        >
+          Alg Tracker
+        </button>
+        <button
+          className={`mode-btn${view === "lab" ? " active" : ""}`}
+          onClick={() => setView("lab")}
+          style={{ flex: "0 0 auto", padding: "8px 16px" }}
+        >
+          BLE Lab
+        </button>
+      </nav>
+
       {/* Mode selector */}
       <section className="lab-panel">
         <div className="mode-selector">
@@ -438,6 +457,12 @@ export default function App() {
         </div>
       </section>
 
+      {view === "tracker" && (
+        <AlgTrackerPanel liveGanMoves={matcherGanMoves} onReset={handleMatcherReset} />
+      )}
+
+      {view === "lab" && (
+      <>
       <Virtual2x2Panel
         facelets24={latestFacelets24}
         source={latestVirtualRow}
@@ -626,6 +651,8 @@ export default function App() {
           </pre>
         )}
       </section>
+      </>
+      )}
     </main>
   );
 }

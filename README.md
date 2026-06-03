@@ -14,7 +14,7 @@ npm run dev
 ```
 
 Open the URL shown in the terminal (default: http://localhost:5173).
-
+hello!
 ---
 
 ## Browser requirements
@@ -69,6 +69,56 @@ Web Bluetooth is not supported in Firefox, Safari, or mobile browsers.
 Manual MAC is optional for connection but required for raw GAN251 UI decryption when the browser cannot capture the MAC from advertisement data.  
 Web Bluetooth on most platforms does **not** expose the real hardware MAC address — `device.id` is a browser-specific opaque identifier.  
 The MAC you enter stays in memory only and appears in exported local logs. It is never sent anywhere.
+
+---
+
+## Alg Tracker (anchor-corner frame model)
+
+The **Alg Tracker** tab is a focused page for following an algorithm on the GAN 251
+and confirming each move from the live BLE stream, despite the hardware only
+reporting `U` / `R` / `F` (+ primes).
+
+### Why the hardware is "lying"
+
+The 251 is a 2x2 — it has no fixed centres, so it describes every turn relative to a
+single fixed reference corner: the **anchor corner** (orange/blue/yellow, the `DLB`
+corner, opposite the white/green/red `URF` corner). In the home pose (white top,
+green front) that gives:
+
+- `yellow → U`, `orange → R`, `blue → F` (and `white → U`, `red → R`, `green → F`)
+
+so physical `D → U`, `L → R`, `B → F`.
+
+The key subtlety: **a turn that moves the anchor corner rotates the whole reference
+frame.** After a physical `D`, the anchor's orange sticker swings to the front, so
+"front" now sits on the orange/red (`R`) axis — a following physical `F` is therefore
+reported as `R`. The tracker models this drift from first principles with integer 3x3
+rotation matrices, so it is correct for every face, every suffix (`'`, `2`) and any
+number of chained moves.
+
+### Modules
+
+- `src/lib/algTracker.ts` — the deterministic tracker. Tracks the cube's orientation
+  as a rotation matrix anchored to the `DLB` corner; advances the frame only when a
+  move turns the layer containing the anchor; collapses canonical faces to the
+  reported `U`/`R`/`F` axis. Key exports: `trackAlg`, `reportedMoveForPhysical`,
+  `advanceFrame`, `handToCanonical`, `simulateReportsWithFrameDrift`.
+- `src/components/AlgTrackerPanel.tsx` — the page: virtual cube, alg to follow,
+  reported stream, and the per-step transformed/accepted table.
+
+Because the alg is known, the tracker is **deterministic** (it advances the frame by
+the expected move and checks the reported token is consistent) rather than the
+hypothesis-branching search used by the older `gan251AlgMatcher.ts`.
+
+Test the logic without a cube: press `U` / `R` / `F` (hold `Shift` for a prime) to
+feed synthetic reported moves into the stream.
+
+Run the regression self-test:
+
+```bash
+node_modules/.bin/esbuild scripts/algTracker.selftest.ts --bundle \
+  --platform=node --format=esm --outfile=/tmp/algtest.mjs && node /tmp/algtest.mjs
+```
 
 ---
 
