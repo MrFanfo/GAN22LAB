@@ -302,6 +302,7 @@ export function trackAlg(expectedMoves: Move[], reported: GanMove[]): TrackResul
   let firstErrorIndex: number | null = null;
   let reportedIndex = 0;
   let stopped = false;
+  let waitingForCurrentStep = false;
 
   for (let i = 0; i < expectedMoves.length; i++) {
     const expectedPhysical = expectedMoves[i]!;
@@ -315,7 +316,7 @@ export function trackAlg(expectedMoves: Move[], reported: GanMove[]): TrackResul
     let actualReported: GanMove[] = [];
     let acceptedAsPhysical: Move | null = null;
 
-    if (!stopped) {
+    if (!stopped && !waitingForCurrentStep) {
       const match = matchExpectedReports(expectedReportedAlternatives, reported, reportedIndex);
       status = match.status;
       actualReported = match.actualReported;
@@ -327,6 +328,8 @@ export function trackAlg(expectedMoves: Move[], reported: GanMove[]): TrackResul
         firstErrorIndex = i;
         reportedIndex += match.consumed;
         stopped = true; // user diverged — stop consuming the live stream
+      } else {
+        waitingForCurrentStep = true; // partial double/silent future rows must not reuse the same report
       }
     }
 
