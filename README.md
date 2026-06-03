@@ -4,7 +4,7 @@ A standalone browser tool for debugging GAN 251 (2×2) Bluetooth Low Energy beha
 
 **Live:** [mrfanfo.github.io/GAN22LAB/](https://mrfanfo.github.io/GAN22LAB/)
 
-> Not part of Cubyqo. No backend, no accounts, no data leaves the browser.
+
 
 ---
 
@@ -20,34 +20,8 @@ A standalone browser tool for debugging GAN 251 (2×2) Bluetooth Low Energy beha
 
 ---
 
-## Run locally
 
-```bash
-npm install
-npm run dev      # http://localhost:5173/GAN22LAB/
-npm run build    # tsc + vite → dist/
-```
 
-Requires **Chrome or Edge** on desktop — Web Bluetooth is not available in Firefox/Safari.
-
-### Self-tests (no cube needed)
-
-```bash
-# Anchor-corner frame drift regression
-node_modules/.bin/esbuild scripts/algTracker.selftest.ts \
-  --bundle --platform=node --format=esm --outfile=/tmp/algtest.mjs \
-  && node /tmp/algtest.mjs
-
-# Move-recovery FIFO
-node_modules/.bin/esbuild scripts/recovery.selftest.ts \
-  --bundle --platform=node --format=esm --outfile=/tmp/r.mjs \
-  && node /tmp/r.mjs
-
-# Move-recovery with history request/response
-node_modules/.bin/esbuild scripts/recovery-io.selftest.ts \
-  --bundle --platform=node --format=esm --outfile=/tmp/r.mjs \
-  && node /tmp/r.mjs
-```
 
 ---
 
