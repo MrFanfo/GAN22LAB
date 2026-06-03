@@ -18,7 +18,7 @@
 // every face, every suffix (', 2) and any number of chained moves — not just the
 // hand-checked D-then-F case.
 //
-// The tracker is DETERMINISTIC, not a hypothesis search: we already told the user
+// The tracker is DETERMINISTIC, not an inference search: we already told the user
 // which move to do, so the frame advances by the EXPECTED move and we only check
 // that the reported token is consistent with it.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -30,7 +30,7 @@ import {
   type GanMove,
   type Move,
   type Suffix,
-} from "./gan251AlgMatcher";
+} from "./gan251Moves";
 
 // ─── Tiny integer linear algebra (all rotations are 90° multiples) ───────────
 
@@ -211,6 +211,8 @@ export type TrackResult = {
   extraReported: GanMove[]; // reported moves beyond the end of the algorithm
   firstErrorIndex: number | null; // index of the first mismatch, if any
   complete: boolean; // every step accepted
+  startFrame: CubeFrame; // frame assumed at the beginning of this attempt
+  finalFrame: CubeFrame; // frame after accepted moves (safe to reuse only when complete)
 };
 
 function sameReportStream(a: GanMove[], b: GanMove[]): boolean {
@@ -293,12 +295,17 @@ function matchExpectedReports(
 }
 
 // Run the deterministic tracker over an expected algorithm and the live stream of
-// reported hardware moves. The reference frame starts at HOME (white-top green-front)
-// and advances by each ACCEPTED expected move.
-export function trackAlg(expectedMoves: Move[], reported: GanMove[]): TrackResult {
+// reported hardware moves. Training mode can pass the frame left by the previous
+// correct repetition; after a mistake, callers should re-anchor back to HOME_FRAME.
+export function trackAlg(
+  expectedMoves: Move[],
+  reported: GanMove[],
+  initialFrame: CubeFrame = HOME_FRAME,
+): TrackResult {
   const steps: TrackedStep[] = [];
   const acceptedPhysical: Move[] = [];
-  let frame = HOME_FRAME;
+  let frame = initialFrame;
+  let acceptedFrame = initialFrame;
   let firstErrorIndex: number | null = null;
   let reportedIndex = 0;
   let stopped = false;
@@ -323,6 +330,7 @@ export function trackAlg(expectedMoves: Move[], reported: GanMove[]): TrackResul
       if (match.status === "accepted") {
         acceptedAsPhysical = expectedPhysical;
         acceptedPhysical.push(expectedPhysical);
+        acceptedFrame = advanceFrame(acceptedFrame, expectedPhysical);
         reportedIndex += match.consumed;
       } else if (match.status === "wrong") {
         firstErrorIndex = i;
@@ -360,13 +368,18 @@ export function trackAlg(expectedMoves: Move[], reported: GanMove[]): TrackResul
     extraReported: stopped ? [] : extraReported,
     firstErrorIndex,
     complete,
+    startFrame: initialFrame,
+    finalFrame: acceptedFrame,
   };
 }
 
 // Convenience: the full reported stream a correct run would produce, with frame
 // drift applied. Useful for the "if done correctly the cube will report:" hint.
-export function simulateReportsWithFrameDrift(expectedMoves: Move[]): GanMove[] {
-  let frame = HOME_FRAME;
+export function simulateReportsWithFrameDrift(
+  expectedMoves: Move[],
+  initialFrame: CubeFrame = HOME_FRAME,
+): GanMove[] {
+  let frame = initialFrame;
   const out: GanMove[] = [];
   for (const move of expectedMoves) {
     out.push(...expectedReportAlternatives(frame, move)[0]!);

@@ -13,7 +13,6 @@ A standalone browser tool for debugging GAN 251 (2×2) Bluetooth Low Energy beha
 - **BLE Lab** — connect a GAN 251 over Web Bluetooth, see every raw/decrypted packet in a live table (hex, CRC, decoded meaning, facelets, derived key/IV, timings)
 - **Alg Tracker** — follow an algorithm step-by-step; the tracker accounts for the GAN 251's anchor-corner frame drift so `D` is correctly mapped to a reported `U`, and frame changes after moves are applied automatically
 - **Virtual 2×2 cube** — 3D Three.js view driven by the live move/state stream
-- **Hypothesis matcher** — resolves the `U`/`D`, `R`/`L`, `F`/`B` axis ambiguity when you don't know which physical move was made
 - **Missed-move recovery** — detects BLE serial gaps and requests history from the cube to fill them in before emitting to the app
 - **Orientation calibration** — gyroscope quaternion pipeline with semantic face detection
 - **Keyboard simulation** — press `U`/`R`/`F` (Shift for prime) to inject synthetic moves without a physical cube
@@ -36,10 +35,8 @@ Web Bluetooth (Chrome/Edge)
         │
    PacketRow[]         ← rendered in the packet table (App.tsx)
         │
-  ┌─────┴─────┐
-  │           │
-AlgTracker  AlgMatcher
-(known alg)  (ambiguous stream → hypothesis branches)
+   AlgTracker
+(known alg → deterministic anchor-frame verification)
 ```
 
 Key source files:
@@ -51,7 +48,7 @@ Key source files:
 | `src/gan251/virtual2x2Cube.ts` | 2×2 corner model, move application, facelet encoding |
 | `src/gan251/gan251MoveRecovery.ts` | Serial-aware FIFO, gap detection, history request |
 | `src/lib/algTracker.ts` | 3×3 rotation-matrix frame model, deterministic step tracking |
-| `src/lib/gan251AlgMatcher.ts` | Hypothesis engine — score/prune branches per reported move |
+| `src/lib/gan251Moves.ts` | GAN251 move notation parsing and axis-collapse helpers |
 | `src/gan/ganBle.ts` | Raw BLE: connect, discover services, enable notifications |
 | `src/lib/gyro.ts` | Quaternion remapping, Three.js display orientation |
 | `src/lib/orientation.ts` | Semantic face detection from calibrated gyro |
@@ -66,4 +63,4 @@ Web Bluetooth does not expose hardware MAC addresses — `device.id` is a browse
 
 ## Technical deep-dive
 
-See [`docs/wiki.md`](docs/wiki.md) for a complete explanation of the anchor-corner frame model, the AES/CBC encryption scheme, the hypothesis engine, and every module in depth.
+See [`docs/wiki.md`](docs/wiki.md) for a complete explanation of the anchor-corner frame model, the AES/CBC encryption scheme, and every module in depth.

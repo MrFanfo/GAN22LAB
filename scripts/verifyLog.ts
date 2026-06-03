@@ -2,7 +2,7 @@
 // User physically performed:  (L D' L F2 L' D L') x2   then   (R2 U' B2 U2 R2 U' R2) x2
 // The log below is the cube's reported move stream (oldest-first), steps 164..203.
 
-import { parseAlg, type GanMove, type Move } from "../src/lib/gan251AlgMatcher";
+import { parseAlg, type GanMove, type Move } from "../src/lib/gan251Moves";
 import { simulateReportsWithFrameDrift } from "../src/lib/algTracker";
 
 // ── Reported stream from anchormovinglog.json, ordered by cube step 164→203 ──

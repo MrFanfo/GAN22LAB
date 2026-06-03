@@ -1,9 +1,11 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { Quaternion } from "three";
-import { parseAlg, type GanMove } from "../lib/gan251AlgMatcher";
+import { parseAlg, type GanMove } from "../lib/gan251Moves";
 import {
+  HOME_FRAME,
   simulateReportsWithFrameDrift,
   trackAlg,
+  type CubeFrame,
   type TrackedStep,
 } from "../lib/algTracker";
 import { Virtual2x2Cube } from "../gan251/virtual2x2Cube";
@@ -13,7 +15,7 @@ import { VirtualCube2x2 } from "./VirtualCube2x2";
 
 type AlgTrackerPanelProps = {
   liveGanMoves: GanMove[]; // reported moves from cube/keyboard, oldest-first
-  onReset: () => void;
+  onClearAttempt: () => void;
 };
 
 const DIRECTION_FOR_SUFFIX: Record<string, Gan251MoveDirection> = {
@@ -75,21 +77,25 @@ function MoveChip({
   );
 }
 
-export function AlgTrackerPanel({ liveGanMoves, onReset }: AlgTrackerPanelProps) {
+export function AlgTrackerPanel({ liveGanMoves, onClearAttempt }: AlgTrackerPanelProps) {
   const [algValue, setAlgValue] = useState("D F");
+  const [drillFrame, setDrillFrame] = useState<CubeFrame>(HOME_FRAME);
+  const [reanchorNotice, setReanchorNotice] = useState(false);
+  const [completedReps, setCompletedReps] = useState(0);
+  const handledAttemptRef = useRef<string | null>(null);
 
   const expectedMoves = useMemo(() => parseAlg(algValue) ?? [], [algValue]);
   const algValid = useMemo(() => parseAlg(algValue) !== null, [algValue]);
 
   const result = useMemo(
-    () => trackAlg(expectedMoves, liveGanMoves),
-    [expectedMoves, liveGanMoves],
+    () => trackAlg(expectedMoves, liveGanMoves, drillFrame),
+    [expectedMoves, liveGanMoves, drillFrame],
   );
 
   // What a perfect run reports (with anchor-frame drift) — the "target" stream.
   const targetReports = useMemo(
-    () => simulateReportsWithFrameDrift(expectedMoves),
-    [expectedMoves],
+    () => simulateReportsWithFrameDrift(expectedMoves, drillFrame),
+    [expectedMoves, drillFrame],
   );
 
   const facelets = useMemo(
@@ -100,21 +106,73 @@ export function AlgTrackerPanel({ liveGanMoves, onReset }: AlgTrackerPanelProps)
   const nullQuatRef = useRef<Quaternion | null>(null);
 
   const currentStep = result.steps.findIndex((s) => s.status === "pending");
+  const attemptKey = liveGanMoves.join(" ");
+
+  useEffect(() => {
+    handledAttemptRef.current = null;
+    setDrillFrame(HOME_FRAME);
+    setReanchorNotice(false);
+    setCompletedReps(0);
+    onClearAttempt();
+  }, [algValue, onClearAttempt]);
+
+  useEffect(() => {
+    if (!attemptKey || handledAttemptRef.current === attemptKey) return;
+
+    if (result.complete) {
+      handledAttemptRef.current = attemptKey;
+      setDrillFrame(result.finalFrame);
+      setCompletedReps((count) => count + 1);
+      setReanchorNotice(false);
+      onClearAttempt();
+      return;
+    }
+
+    if (result.firstErrorIndex !== null) {
+      handledAttemptRef.current = attemptKey;
+      setDrillFrame(HOME_FRAME);
+      setCompletedReps(0);
+      setReanchorNotice(true);
+      onClearAttempt();
+    }
+  }, [attemptKey, result.complete, result.finalFrame, result.firstErrorIndex, onClearAttempt]);
+
+  const handleReanchor = () => {
+    handledAttemptRef.current = null;
+    setDrillFrame(HOME_FRAME);
+    setReanchorNotice(false);
+    setCompletedReps(0);
+    onClearAttempt();
+  };
 
   return (
     <section className="lab-panel">
       <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 4 }}>
         <h2>Alg Tracker — anchor-corner frame</h2>
-        <button className="lab-btn btn-danger" onClick={onReset} style={{ fontSize: "0.75rem" }}>
-          Reset attempt
+        <button className="lab-btn btn-danger" onClick={handleReanchor} style={{ fontSize: "0.75rem" }}>
+          Re-anchor
         </button>
       </div>
       <p style={{ color: "#64748b", fontSize: "0.82rem", margin: "4px 0 14px" }}>
-        Start with <strong style={{ color: "#cbd5e1" }}>white on top, green in front</strong>. The GAN 251 reports
-        every turn relative to its fixed anchor corner (orange/blue/yellow, DLB). A move that moves the anchor rotates
-        the whole reference frame, so later faces report on a different axis. This tracker advances that frame by each
-        accepted move and checks the live stream against it.
+        Start/restart with the anchor corner fixed: <strong style={{ color: "#cbd5e1" }}>orange on L, blue on B,
+        yellow on D</strong>. Correct repetitions carry the anchor frame forward automatically; after a wrong move,
+        the app restarts from the home anchor frame and assumes you re-anchored before continuing.
       </p>
+
+      {reanchorNotice && (
+        <div style={{
+          margin: "0 0 14px",
+          padding: "10px 12px",
+          borderRadius: 8,
+          border: "1px solid rgba(248,113,113,0.35)",
+          background: "rgba(248,113,113,0.10)",
+          color: "#fecaca",
+          fontSize: "0.82rem",
+        }}>
+          Wrong move detected. Drill restarted and the app is assuming the anchor is back at orange=L, blue=B,
+          yellow=D for the next attempt.
+        </div>
+      )}
 
       {/* ── 2) Alg to follow ── */}
       <div className="field">
@@ -155,7 +213,7 @@ export function AlgTrackerPanel({ liveGanMoves, onReset }: AlgTrackerPanelProps)
         {/* ── 1) Virtual cube ── */}
         <div>
           <div style={{ fontSize: "0.72rem", color: "#64748b", marginBottom: 6 }}>
-            Virtual cube — accepted moves applied ({result.acceptedPhysical.length})
+            Virtual cube — accepted moves applied ({result.acceptedPhysical.length}) · completed reps {completedReps}
           </div>
           <VirtualCube2x2 targetQuaternionRef={nullQuatRef} gyroEnabled={false} facelets24={facelets} moveAlg="" />
         </div>

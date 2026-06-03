@@ -281,65 +281,35 @@ After a frame update, `reportedMoveForPhysical(frame, physicalMove)` computes wh
 
 This is correct by construction. There are no hand-coded tables for specific sequences like "after D, F becomes R" — the geometry figures it out.
 
-### `trackAlg(expectedMoves, reportedStream)` — the public API
+### `trackAlg(expectedMoves, reportedStream, initialFrame)` — the public API
 
 Given:
 - `expectedMoves`: the algorithm you want to verify, as an array of physical move strings (`["D", "F", "U", "R"]`)
 - `reportedStream`: the moves as reported by the hardware
+- `initialFrame`: the anchor frame at the start of this repetition. The first drill starts at `HOME_FRAME`; later correct repetitions can start from the previous result's `finalFrame`.
 
-The function walks both arrays in lockstep:
+The function walks the expected algorithm against the reported stream:
 
-1. Initialize `frame = I`.
+1. Initialize `frame = initialFrame`.
 2. For each expected move at index `i`:
-   - Compute `expectedReport = reportedMoveForPhysical(frame, expectedMoves[i])`.
-   - Compare to `reportedStream[i]`.
-   - If match: `status = "accepted"`, advance the frame with `advanceFrame(frame, expectedMoves[i])`.
+   - Compute the report stream(s) that are valid for that physical move in the current frame.
+   - Compare those valid streams to the next unconsumed hardware report(s).
+   - If match: `status = "accepted"`, consume the report(s), and advance the accepted frame with `advanceFrame(frame, expectedMoves[i])`.
    - If mismatch: `status = "wrong"`, stop consuming.
-   - If reported stream is shorter: `status = "pending"`.
-3. Return a table: `{ physicalMove, expectedReport, actualReport, status }[]`.
+   - If the reported stream is shorter but still matches a valid prefix, keep the step `pending`.
+3. Return the step table plus `finalFrame`, which is safe to use as the next repetition's `initialFrame` only when `complete === true`.
+
+If the user makes a mistake, training mode discards the attempt, resets the trusted frame to `HOME_FRAME`, and assumes the user re-anchors the orange/blue/yellow corner to `L/B/D` before continuing. We intentionally do not infer a new frame after an error, because the wrong physical move may or may not have moved the anchor.
 
 The UI renders this as a step-by-step confirmation table. Green checkmarks for accepted moves, red X for the first wrong move, empty rows for pending steps.
 
-### `simulateReportsWithFrameDrift(physicalMoves)` — for teaching
+### `simulateReportsWithFrameDrift(physicalMoves, initialFrame)` — for teaching
 
-This function takes a sequence of physical moves and returns the complete predicted report sequence the hardware would emit. It is used in `AlgTrackerPanel.tsx` to show users exactly what stream of tokens to expect on the hardware, before they attempt the algorithm.
-
----
-
-## 8. The Hypothesis Engine
-
-The alg tracker works when you *know* the expected algorithm in advance. But there is a different use case: you want to know which physical moves the user made, given only the hardware's reported stream, without knowing the algorithm.
-
-This is harder because the mapping is many-to-one. A reported `U` could be a physical `U` or a physical `D`. In home-frame there are 3 axes × 2 layers = 6 physical faces, but only 3 hardware-reported axes. Each reported token eliminates half the candidates, but the surviving two are fundamentally ambiguous from the reported stream alone.
-
-### `src/lib/gan251AlgMatcher.ts`
-
-The matcher maintains a set of **hypotheses**. Each hypothesis is:
-- `stepIndex`: how many moves of the expected algorithm have been consumed
-- `physicalMoves`: which physical moves have been chosen so far under this hypothesis
-- `frame`: what the current reference frame is under this hypothesis
-- `qualities`: for each step, was the match `"exact"` (same physical face) or `"axis-equivalent"` (same axis, opposite layer — e.g., R reported for L)
-- `score`: sum of quality scores (exact = 3 points, axis-equivalent = 1 point)
-
-**Processing a new reported move:**
-
-For each existing hypothesis, compute all candidate physical moves that could produce the reported token given the hypothesis's current frame. For a reported `R`, the candidates are the two physical moves whose hardware projection is the `R` axis under the current frame.
-
-For each candidate:
-1. Compare to the expected move at `hypothesis.stepIndex`.
-2. If the candidate matches exactly → quality `"exact"`, score += 3.
-3. If the candidate is on the same axis but opposite layer → quality `"axis-equivalent"`, score += 1.
-4. If neither → prune this candidate from consideration.
-
-After expanding all hypotheses, sort by score and keep the top N (default 8). This prevents combinatorial explosion on long algorithms.
-
-**At any point**, `getBestHypothesis()` returns the hypothesis with the highest score. If all surviving hypotheses agree on the physical move for a given step, that move is certain. If they disagree, the step is marked ambiguous.
-
-The matcher is used in `AlgMatcherPanel.tsx` for manual testing and in the automated hypothesis display UI.
+This function takes a sequence of physical moves and returns the complete predicted report sequence the hardware would emit from the given starting frame. It is used in `AlgTrackerPanel.tsx` to show users exactly what stream of tokens to expect on the hardware, before they attempt the algorithm.
 
 ---
 
-## 9. Gyroscope and Orientation
+## 8. Gyroscope and Orientation
 
 The GAN 251 UI V3-2 has a gyroscope that reports orientation as a quaternion via periodic BLE notifications.
 
@@ -363,7 +333,7 @@ This drives `OrientationCalibrationPanel.tsx`, which shows the user the detected
 
 ---
 
-## 10. The Library Mode Path
+## 9. The Library Mode Path
 
 In addition to the raw BLE path, the app supports a "library mode" that uses the `smartcube-web-bluetooth` npm package as a higher-level abstraction.
 
@@ -386,14 +356,14 @@ The benefit of library mode is out-of-the-box support for all cube brands the li
 
 ---
 
-## 11. App Shell and UI
+## 10. App Shell and UI
 
 ### `src/App.tsx`
 
 The app is a single React 18 component tree with two top-level tabs:
 
-- **Alg Tracker tab**: shows `AlgTrackerPanel` + the packet table filtered to moves only
-- **BLE Lab tab**: shows the full `AlgMatcherPanel`, mode selector, connection controls, and the complete raw packet table
+- **Alg Tracker tab**: shows `AlgTrackerPanel`
+- **BLE Lab tab**: shows the mode selector, connection controls, virtual cube, orientation panel, and complete raw packet table
 
 **State owned by App:**
 - `packetRows: PacketRow[]` — the live packet log, displayed in the 19-column table
@@ -420,13 +390,6 @@ The renderer accepts an optional `quaternionRef` for gyro-driven rotation. On ea
 - Renders the step table (physical move, expected report, actual report, status checkmark/X)
 - Shows `VirtualCube2x2` updated from the live stream
 
-### `src/components/AlgMatcherPanel.tsx`
-
-- Two modes: live (uses actual reported moves from BLE) and manual (type moves to test)
-- Shows best hypothesis + all alternatives with scores
-- Per-step breakdown: exact vs axis-equivalent
-- Useful for debugging why the matcher is confused about a particular sequence
-
 ### `src/components/OrientationCalibrationPanel.tsx`
 
 - Connect button (library mode)
@@ -436,7 +399,7 @@ The renderer accepts an optional `quaternionRef` for gyro-driven rotation. On ea
 
 ---
 
-## 12. Synthetic Input
+## 11. Synthetic Input
 
 ### `src/gan251/syntheticGan251Input.ts`
 
@@ -455,7 +418,7 @@ A small collection of known-good packet bytes (captured from a real cube with MA
 
 ---
 
-## 13. Testing
+## 12. Testing
 
 There are no Vitest/Jest unit tests in this repo — the test philosophy is **script-based integration tests** that exercise real end-to-end code paths.
 
@@ -493,7 +456,7 @@ A more complete test that simulates the full request/response cycle:
 
 ---
 
-## 14. Build and Deployment
+## 13. Build and Deployment
 
 ### Vite configuration
 
@@ -529,7 +492,7 @@ The repo deploys to GitHub Pages via the `gh-pages` branch (or GitHub Actions �
 
 ---
 
-## 15. Key Invariants and Non-Obvious Decisions
+## 14. Key Invariants and Non-Obvious Decisions
 
 **Why overlapping AES blocks?** The firmware encrypts 20-byte packets but AES works on 16-byte blocks. The firmware implementation processes two 16-byte windows that overlap in the middle rather than padding. The app must replicate this exactly or every packet fails CRC.
 
@@ -537,15 +500,13 @@ The repo deploys to GitHub Pages via the `gh-pages` branch (or GitHub Actions �
 
 **Why rotation matrices instead of quaternions for frame tracking?** The anchor corner only rotates by 90° increments around face normals. All entries are integers from {-1, 0, 1}. Integer matrix multiply is exact, no floating-point drift. Quaternions would be equivalent but introduce unnecessary complexity and rounding errors for 90° rotations.
 
-**Why a hypothesis engine instead of just asking the user which layer they moved?** The alg tracker assumes the user is following a known algorithm — it only needs to verify. The matcher is for the case where you want to *infer* what the user did from the hardware alone, with no prior knowledge. These are different problems with different solutions.
-
 **Why not use the library for everything?** The library abstracts away the crypto, protocol, and BLE details. This is great for production apps (like Cubyqo) but terrible for debugging. This lab exists precisely to expose those details: raw bytes, derived keys, CRC outcomes, frame-by-frame crypto material. The raw BLE path is the point of the app.
 
-**Why keyboard injection?** Most of the interesting logic (frame drift, hypothesis engine, recovery FIFO) can be tested without a physical cube. The synthetic input path makes every code path reachable in a browser with no hardware.
+**Why keyboard injection?** Most of the interesting logic (frame drift, deterministic tracking, recovery FIFO) can be tested without a physical cube. The synthetic input path makes every code path reachable in a browser with no hardware.
 
 ---
 
-## 16. File Map
+## 15. File Map
 
 ```
 gan251-lab/
@@ -575,7 +536,7 @@ gan251-lab/
 │   │
 │   ├── lib/                          Algorithm tracking and orientation
 │   │   ├── algTracker.ts             Anchor-corner frame model, deterministic tracking
-│   │   ├── gan251AlgMatcher.ts       Hypothesis engine: score/prune per reported move
+│   │   ├── gan251Moves.ts            Move notation parsing and GAN251 axis helpers
 │   │   ├── cubeState2x2.ts           Facelet string utilities
 │   │   ├── gyro.ts                   Quaternion remapping, Three.js display orientation
 │   │   └── orientation.ts            Semantic face detection from calibrated quaternion
@@ -583,7 +544,6 @@ gan251-lab/
 │   ├── components/
 │   │   ├── VirtualCube2x2.tsx        Three.js 2×2 cube renderer
 │   │   ├── AlgTrackerPanel.tsx       Algorithm follow UI + step table
-│   │   ├── AlgMatcherPanel.tsx       Hypothesis display + manual move tester
 │   │   └── OrientationCalibrationPanel.tsx  Gyro calibration UI
 │   │
 │   └── hooks/

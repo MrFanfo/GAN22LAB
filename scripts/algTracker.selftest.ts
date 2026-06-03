@@ -1,7 +1,7 @@
 // Regression self-test for the deterministic anchor-corner alg tracker.
 // Run with:  node_modules/.bin/esbuild scripts/algTracker.selftest.ts --bundle \
 //              --platform=node --format=esm --outfile=/tmp/algtest.mjs && node /tmp/algtest.mjs
-import { parseAlg } from "../src/lib/gan251AlgMatcher";
+import { parseAlg } from "../src/lib/gan251Moves";
 import {
   simulateReportsWithFrameDrift,
   trackAlg,
@@ -32,7 +32,7 @@ eq("D -> U", sim("D"), ["U"]);
 eq("L -> R", sim("L"), ["R"]);
 eq("B -> F", sim("B"), ["F"]);
 eq("D' -> U'", sim("D'"), ["U'"]);
-eq("D2 -> U2", sim("D2"), ["U2"]);
+eq("D2 -> U U", sim("D2"), ["U", "U"]);
 
 // After D the anchor's orange sticker points front, so hand-F is on the R axis.
 // The F turn rotates the anchor about that same front axis, keeping orange front,
@@ -74,5 +74,26 @@ eq("track wrong index", r2.firstErrorIndex, 0);
 const r3 = trackAlg(parseAlg("D F")!, ["U"]);
 eq("track partial accepted", r3.acceptedPhysical, ["D"]);
 eq("track partial step2 pending", r3.steps[1]!.status, "pending");
+
+// Doubles accept either two quarter-turn reports or a single explicit X2 packet.
+const r4 = trackAlg(parseAlg("B2")!, ["F"]);
+eq("track B2 first quarter pending", r4.steps[0]!.status, "pending");
+const r5 = trackAlg(parseAlg("B2")!, ["F", "F"]);
+eq("track B2 from quarters accepted", r5.acceptedPhysical, ["B2"]);
+eq("track B2 from quarters complete", r5.complete, true);
+const r6 = trackAlg(parseAlg("B2")!, ["F2"]);
+eq("track B2 from explicit double accepted", r6.acceptedPhysical, ["B2"]);
+eq("track B2 from explicit double complete", r6.complete, true);
+
+// A correct repetition can hand its final frame to the next repetition.
+const firstRep = trackAlg(parseAlg("D")!, ["U"]);
+const secondRep = trackAlg(parseAlg("F")!, ["R"], firstRep.finalFrame);
+eq("track carries final frame to next rep", secondRep.acceptedPhysical, ["F"]);
+eq("track carried-frame rep complete", secondRep.complete, true);
+
+// A wrong attempt reports a finalFrame for accepted moves only; callers must re-anchor.
+const wrongRep = trackAlg(parseAlg("D F")!, ["F"]);
+eq("wrong attempt accepts no moves", wrongRep.acceptedPhysical, []);
+eq("wrong attempt final frame remains start", wrongRep.finalFrame.orientation, HOME_FRAME.orientation);
 
 console.log(failures === 0 ? "\nALL PASS" : `\n${failures} FAILURE(S)`);
