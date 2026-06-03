@@ -19,7 +19,12 @@ import {
 import type { Gen1DeviceInfo, Gen234CryptoDebug, Gen234CryptoProfileId } from "./ganCrypto";
 import type { BleLogEntry, ConnectionStatus, GanBleLabOptions, PacketRow } from "./types";
 import { Gan251Session, summarizeGan251Packet } from "../gan251/gan251Session";
+import { Gan251MoveRecovery, type RecoveredMove } from "../gan251/gan251MoveRecovery";
+import { encryptGan251CommandPacket } from "../gan251/gan251Crypto";
 import type { Gan251DecodedPacket } from "../gan251/types";
+
+const GAN251_COMMAND_CHAR_UUID = "0000fff5-0000-1000-8000-00805f9b34fb";
+const GAN251_HISTORY_FLUSH_MS = 1500;
 
 // Known characteristic UUID → label / packet type
 const CHAR_META: Record<string, { label: string; packetType: PacketRow["packetType"]; isTelemetry: boolean }> = {
@@ -60,6 +65,10 @@ export class GanBleLab {
   private detectedGen: "gen1" | "gen234" | null = null;
   private cryptoProfile: Gen234CryptoProfileId = "default-gen234";
   private gan251Session: Gan251Session | null = null;
+  private gan251Recovery: Gan251MoveRecovery | null = null;
+  private gan251CommandChar: BluetoothRemoteGATTCharacteristic | null = null;
+  private gan251HistoryTimer: ReturnType<typeof setTimeout> | null = null;
+  private gan251MoveUuid: string | null = null;
   private chosenMac: string | null = null;
   private cryptoDebug: Gen234CryptoDebug | null = null;
   private advManufacturerDataHex: string | null = null;
@@ -108,6 +117,7 @@ export class GanBleLab {
     this.detectedGen = null;
     this.cryptoProfile = "default-gen234";
     this.gan251Session = null;
+    this.resetGan251Recovery();
     this.chosenMac = null;
     this.cryptoDebug = null;
     this.advManufacturerDataHex = null;
@@ -200,6 +210,7 @@ export class GanBleLab {
     this.gen1DeviceInfo = { firmwareRevision: null, systemId: null };
     this.deviceName = null;
     this.gan251Session = null;
+    this.resetGan251Recovery();
 
     let device: BluetoothDevice;
     try {
@@ -404,6 +415,7 @@ export class GanBleLab {
           this.gan251Session = new Gan251Session({
             mac: this.chosenMac,
             debug: true,
+            recoverMoves: true,
             onDebug: (entry) => {
               this.options.onLog({
                 type: "debug",
@@ -411,6 +423,15 @@ export class GanBleLab {
                 data: entry,
               });
             },
+          });
+          this.gan251Recovery = new Gan251MoveRecovery({
+            requestHistory: (serial, count) => this.sendGan251HistoryRequest(serial, count),
+            emitMove: (move) => this.emitRecoveredMove(move),
+            onBufferOverflow: () =>
+              this.options.onLog({
+                type: "warning",
+                message: "GAN251 recovery: move buffer overflow (>16 held); a gap could not be filled",
+              }),
           });
         } catch (error) {
           const msg = error instanceof Error ? error.message : String(error);
@@ -478,8 +499,19 @@ export class GanBleLab {
         read: char.properties.read,
         notify: char.properties.notify,
         indicate: char.properties.indicate,
+        write: char.properties.write,
+        writeWithoutResponse: char.properties.writeWithoutResponse,
       },
     });
+
+    // Capture the GAN251 command characteristic (FFF5) so we can request move history.
+    if (
+      uuid.toLowerCase() === GAN251_COMMAND_CHAR_UUID &&
+      (char.properties.write || char.properties.writeWithoutResponse)
+    ) {
+      this.gan251CommandChar = char;
+      this.options.onLog({ type: "info", message: "GAN251 command characteristic (fff5) ready for move-history requests" });
+    }
 
     if (char.properties.read) {
       try {
@@ -557,6 +589,29 @@ export class GanBleLab {
           return;
         }
         const decoded = this.gan251Session.processEncryptedNotify(bytes);
+
+        // ── Missed-move recovery (mirrors the library's Gen4 driver) ──
+        if (this.gan251Recovery) {
+          if (decoded.kind === "move" && decoded.face && decoded.direction !== "unknown") {
+            // Hold the move; the recovery FIFO emits it (and any recovered gaps) in order.
+            this.gan251MoveUuid = uuid;
+            this.gan251Recovery.ingestMove(decoded.step, decoded.face, decoded.direction, decoded.cubeTimestamp);
+            this.syncGan251FlushTimer();
+            return;
+          }
+          if (decoded.kind === "state") {
+            this.gan251Recovery.ingestState(decoded.step);
+            this.syncGan251FlushTimer();
+            // still surface the state packet row below
+          }
+          if (decoded.kind === "history") {
+            this.gan251Recovery.ingestHistory(decoded.moves);
+            this.syncGan251FlushTimer();
+            this.options.onPacketRow(this.mapGan251DecodedToPacketRow(decoded, uuid, rawHex, bytes.length));
+            return;
+          }
+        }
+
         this.options.onPacketRow(this.mapGan251DecodedToPacketRow(decoded, uuid, rawHex, bytes.length));
         return;
       }
@@ -622,6 +677,120 @@ export class GanBleLab {
     };
 
     this.options.onPacketRow(row);
+  }
+
+  private resetGan251Recovery(): void {
+    if (this.gan251HistoryTimer) {
+      clearTimeout(this.gan251HistoryTimer);
+      this.gan251HistoryTimer = null;
+    }
+    this.gan251Recovery = null;
+    this.gan251CommandChar = null;
+    this.gan251MoveUuid = null;
+  }
+
+  /** Build and send an encrypted move-history request to the cube (FFF5). */
+  private sendGan251HistoryRequest(serial: number, count: number): void {
+    if (!this.gan251CommandChar) {
+      this.options.onLog({
+        type: "warning",
+        message: `GAN251 recovery: gap detected (serial=${serial}, count=${count}) but no writable command characteristic`,
+      });
+      return;
+    }
+    if (!this.chosenMac) return;
+
+    const plain = new Uint8Array(20);
+    plain.set([0xd1, 0x04, serial & 0xff, 0x00, count & 0xff, 0x00]);
+    let encrypted: Uint8Array;
+    try {
+      encrypted = encryptGan251CommandPacket(plain, this.chosenMac);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.options.onLog({ type: "error", message: `GAN251 history encrypt failed: ${msg}` });
+      return;
+    }
+
+    this.options.onLog({
+      type: "debug",
+      message: `GAN251 requesting move history serial=${serial} count=${count}`,
+    });
+
+    const char = this.gan251CommandChar;
+    const write = char.properties.writeWithoutResponse
+      ? char.writeValueWithoutResponse(encrypted as BufferSource)
+      : char.writeValueWithResponse(encrypted as BufferSource);
+    write.catch((err) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.options.onLog({ type: "warning", message: `GAN251 history request write failed: ${msg}` });
+    });
+  }
+
+  /** Emit a move surfaced by the recovery FIFO (live or recovered), in serial order. */
+  private emitRecoveredMove(move: RecoveredMove): void {
+    const session = this.gan251Session;
+    if (!session) return;
+    session.applyRecoveredMove(move.face, move.direction);
+
+    const suffix = move.direction === "counterclockwise" ? "'" : move.direction === "double" ? "2" : "";
+    const notation = `${move.face}${suffix}`;
+    const recovered = move.localTimestamp === null;
+    const summary = `${recovered ? "recovered " : ""}move serial=${move.serial} notation=${notation}`;
+
+    this.options.onPacketRow({
+      id: crypto.randomUUID(),
+      packetNum: ++this.rowCounter,
+      at: Date.now(),
+      mode: "raw",
+      packetType: "MOVE",
+      characteristicUuid: this.gan251MoveUuid,
+      rawHex: null,
+      rawByteLength: null,
+      decryptedHex: null,
+      decryptStatus: recovered ? null : "success",
+      meaning: summary,
+      transform: notation,
+      cubeTimestamp: move.cubeTimestamp,
+      deviceName: this.deviceName,
+      protocolName: this.detectedGenLabel,
+      isTelemetry: false,
+      saltHex: this.cryptoDebug?.saltHex ?? null,
+      finalKeyHex: this.cryptoDebug?.finalKeyHex ?? null,
+      finalIvHex: this.cryptoDebug?.finalIvHex ?? null,
+      protocolValid: true,
+      validationReason: recovered ? "recovered from move history" : "live move (ordered via recovery FIFO)",
+      decodedKind: "move",
+      decodedSummary: summary,
+      facelets24: session.getFacelets24(),
+      moveDrivenFacelets24: session.getMoveDrivenFacelets24(),
+      stateDrivenFacelets24: session.getStateDrivenFacelets24(),
+      moveSerial: move.serial,
+      recovered,
+    });
+  }
+
+  /** Arm/disarm the safety timer that force-flushes the buffer if history never arrives. */
+  private syncGan251FlushTimer(): void {
+    const rec = this.gan251Recovery;
+    if (!rec) return;
+    if (rec.pendingCount > 0) {
+      if (!this.gan251HistoryTimer) {
+        this.gan251HistoryTimer = setTimeout(() => {
+          this.gan251HistoryTimer = null;
+          const gapped = this.gan251Recovery?.forceFlush() ?? [];
+          if (gapped.length > 0) {
+            this.options.onLog({
+              type: "warning",
+              message: `GAN251 recovery: no move history received in time; force-flushed across unrecovered gap at serial(s) ${gapped.join(", ")}`,
+            });
+          }
+          this.syncGan251FlushTimer();
+        }, GAN251_HISTORY_FLUSH_MS);
+      }
+    } else if (this.gan251HistoryTimer) {
+      clearTimeout(this.gan251HistoryTimer);
+      this.gan251HistoryTimer = null;
+    }
   }
 
   private mapGan251DecodedToPacketRow(

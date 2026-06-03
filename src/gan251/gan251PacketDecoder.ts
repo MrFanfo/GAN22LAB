@@ -4,6 +4,8 @@ import type {
   Gan251DecodedPacket,
   Gan251Face,
   Gan251GenericPacket,
+  Gan251HistoryMove,
+  Gan251HistoryPacket,
   Gan251InvalidPacket,
   Gan251MoveByteDecode,
   Gan251MoveDirection,
@@ -22,7 +24,7 @@ const FACE_MASK_TO_FACE: Record<number, Gan251Face> = {
 };
 
 type PacketInfo = {
-  kind: Exclude<Gan251PacketKind, "move" | "state" | "invalid">;
+  kind: Exclude<Gan251PacketKind, "move" | "state" | "history" | "invalid">;
   meaning: string;
 };
 
@@ -166,6 +168,9 @@ export function decodeGan251DecryptedPacket(
   if (packetId === 0xed) {
     return decodeStatePacket(rawHex, decrypted, decryptedHex, crc.reason, crc.valid);
   }
+  if (packetId === 0xd1) {
+    return decodeHistoryPacket(rawHex, decrypted, decryptedHex, crc.reason, crc.valid);
+  }
 
   const info = GENERIC_PACKET_INFO[packetId] ?? {
     kind: "notify" as const,
@@ -222,6 +227,61 @@ function decodeMovePacket(
     notation: move.notation,
     notationGuess: move.notationGuess,
     unknownBytes: Array.from(decrypted.slice(9, -2)),
+  };
+}
+
+// GAN Gen4 move-history nibble face encoding: a 3-bit face code indexes into
+// this table to give the URFDLB face. (Same table the library uses for 0xD1.)
+const HISTORY_FACE_CODES = [1, 5, 3, 0, 4, 2];
+const HISTORY_FACE_CHARS: Gan251Face[] = ["U", "R", "F", "D", "L", "B"];
+
+function decodeHistoryPacket(
+  rawHex: string,
+  decrypted: Uint8Array,
+  decryptedHex: string,
+  crcReason: string,
+  crcValid: boolean | null,
+): Gan251HistoryPacket | Gan251InvalidPacket {
+  if (decrypted.length < 3) {
+    return invalidPacket(rawHex, decrypted, 0xd1, "GAN251 move-history packet too short");
+  }
+
+  const reader = new MsbBitReader(decrypted);
+  const dataLength = decrypted[1] ?? 0;
+  const startSerial = reader.read(16, 8);
+  // Each history record is byte-aligned as two 4-bit moves per data byte.
+  const count = Math.max(0, (dataLength - 1) * 2);
+
+  const moves: Gan251HistoryMove[] = [];
+  for (let i = 0; i < count; i++) {
+    // Stop if we run past the available bytes (defensive against short packets).
+    if (24 + 4 * i + 4 > decrypted.length * 8) break;
+    const faceCode = reader.read(24 + 4 * i, 3);
+    const dirBit = reader.read(27 + 4 * i, 1);
+    const faceIndex = HISTORY_FACE_CODES.indexOf(faceCode);
+    if (faceIndex < 0) continue;
+    const face = HISTORY_FACE_CHARS[faceIndex]!;
+    const direction: Gan251MoveDirection = dirBit === 1 ? "counterclockwise" : "clockwise";
+    moves.push({
+      serial: (startSerial - i) & 0xff,
+      face,
+      direction,
+      notation: `${face}${direction === "counterclockwise" ? "'" : ""}`,
+    });
+  }
+
+  return {
+    kind: "history",
+    rawHex,
+    decryptedHex,
+    packetId: 0xd1,
+    crcValid,
+    validationReason: `${crcReason}; move-history startSerial=${startSerial} count=${moves.length}`,
+    rawBytes: [],
+    decryptedBytes: Array.from(decrypted),
+    startSerial,
+    count: moves.length,
+    moves,
   };
 }
 

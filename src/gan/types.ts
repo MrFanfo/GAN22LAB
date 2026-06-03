@@ -48,6 +48,10 @@ export type PacketRow = {
   facelets24?: string | null;
   moveDrivenFacelets24?: string | null;
   stateDrivenFacelets24?: string | null;
+  /** Move serial number (0-255), when known — used to order/recover the move stream. */
+  moveSerial?: number | null;
+  /** True if this move was missed over BLE and recovered from the cube's move history. */
+  recovered?: boolean;
 };
 
 // Legacy log entry kept for the diagnostic log panel

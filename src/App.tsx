@@ -601,7 +601,13 @@ export default function App() {
                       <td className="col-meaning mono">{row.meaning}</td>
                       <td className="col-transform">
                         {row.transform ? (
-                          <span className="transform-move">{row.transform}</span>
+                          <span
+                            className="transform-move"
+                            title={row.recovered ? `recovered from move history (serial ${row.moveSerial ?? "?"})` : row.moveSerial != null ? `serial ${row.moveSerial}` : undefined}
+                            style={row.recovered ? { color: "#c084fc", border: "1px solid #a855f733", borderRadius: 4, padding: "0 4px" } : undefined}
+                          >
+                            {row.recovered ? "↺ " : ""}{row.transform}
+                          </span>
                         ) : <span className="dim-dash">—</span>}
                       </td>
                       <td className="col-facelets mono" title={row.facelets24 ?? undefined}>

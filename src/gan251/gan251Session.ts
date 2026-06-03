@@ -6,7 +6,13 @@ import {
 } from "./gan251Crypto";
 import { decodeGan251DecryptedPacket } from "./gan251PacketDecoder";
 import { Virtual2x2Cube } from "./virtual2x2Cube";
-import type { Gan251DecodedPacket, Gan251MovePacket, Gan251StatePacket } from "./types";
+import type {
+  Gan251DecodedPacket,
+  Gan251Face,
+  Gan251MoveDirection,
+  Gan251MovePacket,
+  Gan251StatePacket,
+} from "./types";
 
 export type Gan251SessionDebugEntry = {
   rawHex: string;
@@ -22,11 +28,18 @@ export type Gan251SessionOptions = {
   mac: string;
   debug?: boolean;
   onDebug?: (entry: Gan251SessionDebugEntry) => void;
+  /**
+   * When true, incoming move packets are NOT applied to the virtual cube on decode.
+   * The caller drives the cube via applyRecoveredMove() in correct serial order,
+   * after the missed-move recovery FIFO has reordered/filled the stream.
+   */
+  recoverMoves?: boolean;
 };
 
 export class Gan251Session {
   private readonly mac: string;
   private readonly debug: boolean;
+  private readonly recoverMoves: boolean;
   private readonly onDebug?: (entry: Gan251SessionDebugEntry) => void;
   private readonly cube = Virtual2x2Cube.solved();
   private readonly moveDrivenCube = Virtual2x2Cube.solved();
@@ -35,6 +48,7 @@ export class Gan251Session {
   constructor(options: Gan251SessionOptions) {
     this.mac = options.mac;
     this.debug = options.debug ?? false;
+    this.recoverMoves = options.recoverMoves ?? false;
     this.onDebug = options.onDebug;
     if (!deriveGan251KeyIv(this.mac)) {
       throw new Error(`Invalid GAN251 MAC: ${this.mac}`);
@@ -153,8 +167,19 @@ export class Gan251Session {
 
   private applyMove(decoded: Gan251MovePacket): void {
     if (decoded.crcValid === false || !decoded.face || decoded.direction === "unknown") return;
+    // When recovery is enabled, the caller applies moves in serial order via
+    // applyRecoveredMove() once the FIFO has filled any gaps. Skip here to avoid
+    // applying out-of-order or duplicating recovered moves.
+    if (this.recoverMoves) return;
     this.cube.applyMove(decoded.face, decoded.direction);
     this.moveDrivenCube.applyMove(decoded.face, decoded.direction);
+  }
+
+  /** Apply a move surfaced by the recovery FIFO (in correct serial order). */
+  applyRecoveredMove(face: Gan251Face, direction: Gan251MoveDirection): void {
+    if (direction === "unknown") return;
+    this.cube.applyMove(face, direction);
+    this.moveDrivenCube.applyMove(face, direction);
   }
 
   private attachFaceletViews(decoded: Gan251DecodedPacket): void {
@@ -183,6 +208,8 @@ export function summarizeGan251Packet(decoded: Gan251DecodedPacket): string {
       return `move step=${decoded.step} ts=${decoded.cubeTimestamp} byte=0x${decoded.rawMoveByte.toString(16).padStart(2, "0")} notation=${decoded.notation ?? decoded.notationGuess ?? "?"}`;
     case "state":
       return `state step=${decoded.step} cp=${decoded.cornerPermutation.join("")} co=${decoded.cornerOrientation.join("")} facelets=${decoded.facelets24}`;
+    case "history":
+      return `move-history startSerial=${decoded.startSerial} count=${decoded.count} moves=${decoded.moves.map((m) => m.notation).join("")}`;
     case "invalid":
       return `invalid ${decoded.error}`;
     default:

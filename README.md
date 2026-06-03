@@ -122,6 +122,38 @@ node_modules/.bin/esbuild scripts/algTracker.selftest.ts --bundle \
 
 ---
 
+## Missed-move recovery (raw BLE)
+
+BLE notifications can be dropped during fast turning, leaving holes in the move
+stream. The raw BLE path now recovers them, ported from the `smartcube-web-bluetooth`
+library's **GAN Gen4** driver (the GAN251 UI shares that move/serial/command format).
+
+How it works:
+
+- Every move carries an 8-bit **serial** (byte 6–7 of the decrypted move packet).
+- A FIFO buffer (`src/gan251/gan251MoveRecovery.ts`) only emits a move when its serial
+  is contiguous with the last one emitted. A gap means moves were missed.
+- On a gap, the lab sends an encrypted **move-history request** (`0xD1 0x04 <serial> 0
+  <count> 0`) to the cube's command characteristic (`fff5`), built with
+  `encryptGan251CommandPacket()` (the inverse of the notify decrypt).
+- The cube replies with a `0xD1` **MOVE_HISTORY** packet; `gan251PacketDecoder.ts`
+  decodes the packed 4-bit moves, and they are injected ahead of the held move so the
+  buffer drains in correct serial order.
+- Periodic `0xED` state packets also carry the serial, so idle gaps are caught too.
+- Safety: if no history reply arrives within 1.5 s (e.g. a cube that doesn't support
+  the command), the buffer is force-flushed so the live stream never stalls; the gap is
+  logged.
+
+Recovered moves are flagged (`recovered: true`, with `moveSerial`) and shown with a
+`↺` marker in the packet table. Self-tests:
+
+```bash
+node_modules/.bin/esbuild scripts/recovery.selftest.ts    --bundle --platform=node --format=esm --outfile=/tmp/r.mjs && node /tmp/r.mjs
+node_modules/.bin/esbuild scripts/recovery-io.selftest.ts --bundle --platform=node --format=esm --outfile=/tmp/r.mjs && node /tmp/r.mjs
+```
+
+---
+
 ## GAN251 module layout
 
 The Raw BLE GAN251 UI path is implemented as reusable modules under `src/gan251/`:

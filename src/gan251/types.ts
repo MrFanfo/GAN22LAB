@@ -9,6 +9,7 @@ export type Gan251MoveDirection =
 export type Gan251PacketKind =
   | "move"
   | "state"
+  | "history"
   | "battery"
   | "gyro"
   | "hardware"
@@ -89,13 +90,30 @@ export type Gan251StatePacket = Gan251DecodeBase & {
   };
 };
 
+export type Gan251HistoryMove = {
+  serial: number;
+  face: Gan251Face;
+  direction: Gan251MoveDirection;
+  notation: string;
+};
+
+// MOVE_HISTORY response (event type 0xD1). Mirrors the GAN Gen4 protocol the
+// GAN251 UI shares: a batch of past moves, newest-first, packed 4 bits each.
+export type Gan251HistoryPacket = Gan251DecodeBase & {
+  kind: "history";
+  packetId: 0xd1;
+  startSerial: number;
+  count: number;
+  moves: Gan251HistoryMove[];
+};
+
 export type Gan251InvalidPacket = Gan251DecodeBase & {
   kind: "invalid";
   error: string;
 };
 
 export type Gan251GenericPacket = Gan251DecodeBase & {
-  kind: Exclude<Gan251PacketKind, "move" | "state" | "invalid">;
+  kind: Exclude<Gan251PacketKind, "move" | "state" | "history" | "invalid">;
   meaning: string;
   payloadBytes: number[];
 };
@@ -103,5 +121,6 @@ export type Gan251GenericPacket = Gan251DecodeBase & {
 export type Gan251DecodedPacket =
   | Gan251MovePacket
   | Gan251StatePacket
+  | Gan251HistoryPacket
   | Gan251InvalidPacket
   | Gan251GenericPacket;

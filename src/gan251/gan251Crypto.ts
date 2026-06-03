@@ -75,6 +75,32 @@ function decryptAesCbcWindow(buffer: Uint8Array, offset: number, key: Uint8Array
   buffer.set(cipher.decrypt(buffer.subarray(offset, offset + 16)), offset);
 }
 
+function encryptAesCbcWindow(buffer: Uint8Array, offset: number, key: Uint8Array, iv: Uint8Array): void {
+  const cipher = new ModeOfOperation.cbc(key, iv);
+  buffer.set(cipher.encrypt(buffer.subarray(offset, offset + 16)), offset);
+}
+
+// Encrypt an outbound command for the GAN251 (e.g. a move-history request).
+// Inverse of decryptGan251NotifyPacket: encrypt the start-aligned 16-byte window
+// first, then the end-aligned one. The two windows OVERLAP (they are not block
+// padding) — a 20-byte command encrypts windows [0,16) and [4,20). The message
+// length is preserved (commands are 20 bytes, like the packets the firmware emits).
+export function encryptGan251CommandPacket(plain: Uint8Array, mac: string): Uint8Array {
+  const derived = deriveGan251KeyIv(mac);
+  if (!derived) {
+    throw new Error(`Invalid GAN251 MAC: ${mac}`);
+  }
+  if (plain.length < 16) {
+    throw new Error(`GAN251 command too short: ${plain.length} bytes (need >= 16)`);
+  }
+  const out = new Uint8Array(plain);
+  encryptAesCbcWindow(out, 0, derived.key, derived.iv);
+  if (out.length > 16) {
+    encryptAesCbcWindow(out, out.length - 16, derived.key, derived.iv);
+  }
+  return out;
+}
+
 export function decryptGan251NotifyPacket(rawPacket: Uint8Array, mac: string): {
   decrypted: Uint8Array;
   cryptoDebug: Gan251CryptoDebug;
