@@ -197,8 +197,9 @@ export type StepStatus = "accepted" | "wrong" | "pending";
 export type TrackedStep = {
   index: number;
   expectedPhysical: Move; // what we asked the user to do (hand notation)
-  expectedReported: GanMove; // what the hardware should emit for it, in THIS frame
-  actualReported: GanMove | null; // what the hardware actually emitted (if any yet)
+  expectedReported: GanMove[]; // what the hardware should emit for it, in THIS frame
+  expectedReportedAlternatives: GanMove[][]; // equivalent streams, e.g. X2 or X X
+  actualReported: GanMove[]; // what the hardware actually emitted for this step so far
   acceptedAsPhysical: Move | null; // expectedPhysical, once accepted
   status: StepStatus;
   movesAnchor: boolean; // does this move turn the anchor corner → rotate the frame?
@@ -212,6 +213,85 @@ export type TrackResult = {
   complete: boolean; // every step accepted
 };
 
+function sameReportStream(a: GanMove[], b: GanMove[]): boolean {
+  return a.length === b.length && a.every((move, index) => move === b[index]);
+}
+
+function uniqueReportStreams(streams: GanMove[][]): GanMove[][] {
+  const out: GanMove[][] = [];
+  for (const stream of streams) {
+    if (!out.some((existing) => sameReportStream(existing, stream))) out.push(stream);
+  }
+  return out;
+}
+
+function splitDoubleMoveReports(frame: CubeFrame, move: Move, suffix: "" | "'"): GanMove[] {
+  const p = parseMove(move);
+  if (!p) throw new Error(`Invalid move: ${move}`);
+  const first = `${p.face}${suffix}` as Move;
+  const midFrame = advanceFrame(frame, first);
+  const second = `${p.face}${suffix}` as Move;
+  return [
+    reportedMoveForPhysical(frame, first),
+    reportedMoveForPhysical(midFrame, second),
+  ];
+}
+
+function expectedReportAlternatives(frame: CubeFrame, move: Move): GanMove[][] {
+  const p = parseMove(move);
+  if (!p) throw new Error(`Invalid move: ${move}`);
+  if (p.suffix !== "2") return [[reportedMoveForPhysical(frame, move)]];
+
+  // Real GAN251 move streams commonly expose a double as two quarter-turn events.
+  // Keep the one-packet X2 form too, so decoder variants remain compatible.
+  return uniqueReportStreams([
+    splitDoubleMoveReports(frame, move, ""),
+    splitDoubleMoveReports(frame, move, "'"),
+    [reportedMoveForPhysical(frame, move)],
+  ]);
+}
+
+function streamMatchesPrefix(stream: GanMove[], reported: GanMove[], startIndex: number): boolean {
+  const available = Math.min(stream.length, reported.length - startIndex);
+  for (let i = 0; i < available; i++) {
+    if (stream[i] !== reported[startIndex + i]) return false;
+  }
+  return true;
+}
+
+function matchExpectedReports(
+  alternatives: GanMove[][],
+  reported: GanMove[],
+  startIndex: number,
+): { status: StepStatus; actualReported: GanMove[]; consumed: number } {
+  for (const stream of alternatives) {
+    if (reported.length - startIndex < stream.length) continue;
+    if (sameReportStream(stream, reported.slice(startIndex, startIndex + stream.length))) {
+      return { status: "accepted", actualReported: stream, consumed: stream.length };
+    }
+  }
+
+  const remaining = Math.max(0, reported.length - startIndex);
+  const pendingStream = alternatives.find((stream) => remaining < stream.length && streamMatchesPrefix(stream, reported, startIndex));
+  if (pendingStream) {
+    return {
+      status: "pending",
+      actualReported: reported.slice(startIndex),
+      consumed: 0,
+    };
+  }
+
+  if (remaining > 0) {
+    return {
+      status: "wrong",
+      actualReported: reported.slice(startIndex, startIndex + 1),
+      consumed: 1,
+    };
+  }
+
+  return { status: "pending", actualReported: [], consumed: 0 };
+}
+
 // Run the deterministic tracker over an expected algorithm and the live stream of
 // reported hardware moves. The reference frame starts at HOME (white-top green-front)
 // and advances by each ACCEPTED expected move.
@@ -220,6 +300,7 @@ export function trackAlg(expectedMoves: Move[], reported: GanMove[]): TrackResul
   const acceptedPhysical: Move[] = [];
   let frame = HOME_FRAME;
   let firstErrorIndex: number | null = null;
+  let reportedIndex = 0;
   let stopped = false;
 
   for (let i = 0; i < expectedMoves.length; i++) {
@@ -227,21 +308,24 @@ export function trackAlg(expectedMoves: Move[], reported: GanMove[]): TrackResul
     // "Cube should say" always assumes the earlier steps were done correctly, so
     // the frame is advanced by the EXPECTED move every iteration (below), matching
     // the perfect-run prediction — not gated on acceptance.
-    const expectedReported = reportedMoveForPhysical(frame, expectedPhysical);
+    const expectedReportedAlternatives = expectedReportAlternatives(frame, expectedPhysical);
+    const expectedReported = expectedReportedAlternatives[0]!;
 
     let status: StepStatus = "pending";
-    let actualReported: GanMove | null = null;
+    let actualReported: GanMove[] = [];
     let acceptedAsPhysical: Move | null = null;
 
-    if (!stopped && i < reported.length) {
-      actualReported = reported[i]!;
-      if (actualReported === expectedReported) {
-        status = "accepted";
+    if (!stopped) {
+      const match = matchExpectedReports(expectedReportedAlternatives, reported, reportedIndex);
+      status = match.status;
+      actualReported = match.actualReported;
+      if (match.status === "accepted") {
         acceptedAsPhysical = expectedPhysical;
         acceptedPhysical.push(expectedPhysical);
-      } else {
-        status = "wrong";
+        reportedIndex += match.consumed;
+      } else if (match.status === "wrong") {
         firstErrorIndex = i;
+        reportedIndex += match.consumed;
         stopped = true; // user diverged — stop consuming the live stream
       }
     }
@@ -251,19 +335,28 @@ export function trackAlg(expectedMoves: Move[], reported: GanMove[]): TrackResul
     const nextFrame = advanceFrame(frame, expectedPhysical);
     const movesAnchor = nextFrame !== frame;
 
-    steps.push({ index: i, expectedPhysical, expectedReported, actualReported, acceptedAsPhysical, status, movesAnchor });
+    steps.push({
+      index: i,
+      expectedPhysical,
+      expectedReported,
+      expectedReportedAlternatives,
+      actualReported,
+      acceptedAsPhysical,
+      status,
+      movesAnchor,
+    });
     frame = nextFrame;
   }
 
-  const consumed = stopped ? (firstErrorIndex ?? 0) + 1 : expectedMoves.length;
-  const extraReported = reported.slice(Math.min(reported.length, consumed));
+  const complete = firstErrorIndex === null && acceptedPhysical.length === expectedMoves.length;
+  const extraReported = complete ? reported.slice(reportedIndex) : [];
 
   return {
     steps,
     acceptedPhysical,
     extraReported: stopped ? [] : extraReported,
     firstErrorIndex,
-    complete: firstErrorIndex === null && reported.length >= expectedMoves.length,
+    complete,
   };
 }
 
@@ -273,7 +366,7 @@ export function simulateReportsWithFrameDrift(expectedMoves: Move[]): GanMove[] 
   let frame = HOME_FRAME;
   const out: GanMove[] = [];
   for (const move of expectedMoves) {
-    out.push(reportedMoveForPhysical(frame, move));
+    out.push(...expectedReportAlternatives(frame, move)[0]!);
     frame = advanceFrame(frame, move);
   }
   return out;

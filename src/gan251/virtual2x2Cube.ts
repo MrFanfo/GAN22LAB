@@ -50,7 +50,7 @@ const MOVE_DEFS: Record<Gan251Face, MoveDef> = {
   F: { cycle: [0, 4, 5, 1], coDelta: [1, 2, 1, 2] },
   D: { cycle: [4, 7, 6, 5], coDelta: [0, 0, 0, 0] },
   L: { cycle: [1, 5, 6, 2], coDelta: [1, 2, 1, 2] },
-  B: { cycle: [2, 6, 7, 3], coDelta: [2, 1, 2, 1] },
+  B: { cycle: [2, 6, 7, 3], coDelta: [1, 2, 1, 2] },
 };
 
 function assertCornerState(cp: number[], co: number[]): void {

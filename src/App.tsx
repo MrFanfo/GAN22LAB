@@ -12,7 +12,6 @@ import {
 import { useSmartcubeConnection } from "./hooks/useSmartcubeConnection";
 import { OrientationCalibrationPanel } from "./components/OrientationCalibrationPanel";
 import { VirtualCube2x2 } from "./components/VirtualCube2x2";
-import { AlgMatcherPanel } from "./components/AlgMatcherPanel";
 import { AlgTrackerPanel } from "./components/AlgTrackerPanel";
 import { parseGanAlg } from "./lib/gan251AlgMatcher";
 import { SOLVED_2X2_FACELETS } from "./lib/cubeState2x2";
@@ -477,8 +476,6 @@ export default function App() {
         onResetGyro={smartcube.resetGyroBasis}
         onCalibrate={smartcube.calibrateSemanticOrientation}
       />
-
-      <AlgMatcherPanel liveGanMoves={matcherGanMoves} onReset={handleMatcherReset} />
 
       {/* Packet table */}
       <section className="lab-panel">

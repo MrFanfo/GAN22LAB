@@ -22,6 +22,14 @@ const DIRECTION_FOR_SUFFIX: Record<string, Gan251MoveDirection> = {
   "2": "double",
 };
 
+function formatMoveStream(moves: readonly string[]): string {
+  return moves.length ? moves.join(" ") : "—";
+}
+
+function formatMoveStreamAlternatives(alternatives: readonly (readonly string[])[]): string {
+  return alternatives.map(formatMoveStream).join(" / ");
+}
+
 // Build the 2x2 facelet string after applying a list of physical moves.
 function faceletsAfter(moves: string[]): string {
   const cube = Virtual2x2Cube.solved();
@@ -241,9 +249,11 @@ function TrackerRow({ step }: { step: TrackedStep }) {
     >
       <td className="mono" style={{ padding: "5px 8px", color: "#64748b" }}>{step.index + 1}</td>
       <td className="mono" style={{ padding: "5px 8px", color: "#cbd5e1" }}>{step.expectedPhysical}</td>
-      <td className="mono" style={{ padding: "5px 8px", color: "#60a5fa" }}>{step.expectedReported}</td>
+      <td className="mono" style={{ padding: "5px 8px", color: "#60a5fa" }}>
+        {formatMoveStreamAlternatives(step.expectedReportedAlternatives)}
+      </td>
       <td className="mono" style={{ padding: "5px 8px", color: rowColor }}>
-        {step.actualReported ?? "—"}
+        {formatMoveStream(step.actualReported)}
       </td>
       <td className="mono" style={{ padding: "5px 8px", color: rowColor, fontWeight: 600 }}>
         {step.status === "accepted" ? step.acceptedAsPhysical
